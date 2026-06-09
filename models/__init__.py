@@ -1,9 +1,35 @@
-"""Pydantic data models for events and requests."""
+"""Data models for LiteLLM-compatible frame protocol."""
 
-from .events import JobExecutionEvent, JobCompletedEvent, JobFailedEvent
+from .frames import (
+    AssistantFrame,
+    ContentBlock,
+    ControlRequest,
+    ControlResponseFrame,
+    ResultFrame,
+    StreamEventFrame,
+    SystemInitFrame,
+    TextBlock,
+    ThinkingBlock,
+    ToolResultBlock,
+    ToolUseBlock,
+    UserEchoFrame,
+    UserMessage,
+    frame_to_dict,
+)
 
 __all__ = [
-    "JobExecutionEvent",
-    "JobCompletedEvent",
-    "JobFailedEvent",
+    "AssistantFrame",
+    "ContentBlock",
+    "ControlRequest",
+    "ControlResponseFrame",
+    "ResultFrame",
+    "StreamEventFrame",
+    "SystemInitFrame",
+    "TextBlock",
+    "ThinkingBlock",
+    "ToolResultBlock",
+    "ToolUseBlock",
+    "UserEchoFrame",
+    "UserMessage",
+    "frame_to_dict",
 ]

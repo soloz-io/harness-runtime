@@ -50,9 +50,9 @@ References:
     - Tasks: Task 6 (Graph Builder Core Logic)
 """
 
+from typing import Any, Dict, List
+
 import structlog
-from typing import Any, Dict, List, Optional
-from langchain_core.tools import BaseTool
 from langchain_core.runnables import Runnable
 
 from core.model_identifier import create_model_identifier
@@ -63,7 +63,6 @@ from core.tool_loader import load_tools_from_definition
 # Note: The spec requires deepagents package with create_deep_agent and CompiledSubAgent
 try:
     from deepagents import create_deep_agent
-    from langchain.agents import create_agent
 except ImportError as e:
     raise ImportError(
         "deepagents package is required but not installed. "
@@ -219,7 +218,6 @@ class GraphBuilder:
             for specialist_node in specialist_configs:
                 # Extract config from node structure
                 specialist_config = specialist_node.get("config", {})
-                specialist_name = specialist_config.get("name", "unknown")
                 sub_agent = build_subagent(specialist_config, available_tools)
                 compiled_subagents.append(sub_agent)
 
@@ -241,7 +239,7 @@ class GraphBuilder:
 
             # Extract orchestrator config from node structure
             orchestrator_actual_config = orchestrator_config.get("config", {})
-            
+
             # Extract orchestrator model configuration
             orchestrator_model_config = orchestrator_actual_config.get("model", {})
             orchestrator_provider = orchestrator_model_config.get("provider", "openai")
@@ -253,11 +251,11 @@ class GraphBuilder:
             )
 
             orchestrator_system_prompt = orchestrator_actual_config.get("system_prompt", "")
-            
+
             # Extract and resolve orchestrator tools
             orchestrator_tool_names = orchestrator_actual_config.get("tools", [])
             orchestrator_tools = []
-            
+
             for tool_name in orchestrator_tool_names:
                 if tool_name in available_tools:
                     orchestrator_tools.append(available_tools[tool_name])
@@ -267,7 +265,7 @@ class GraphBuilder:
                         tool_name=tool_name,
                         available_tools=list(available_tools.keys())
                     )
-            
+
             # Log orchestrator configuration for verification
             logger.info(
                 "orchestrator_config_extracted",
@@ -297,7 +295,7 @@ class GraphBuilder:
                 ],
                 has_checkpointer=self.checkpointer is not None
             )
-            
+
             # Log detailed subagent info for debugging
             for i, sa in enumerate(compiled_subagents):
                 if isinstance(sa, dict):
@@ -309,14 +307,14 @@ class GraphBuilder:
                         has_tools=len(sa.get("tools", [])),
                         model=sa.get("model")
                     )
-            
+
             # Initialize the model object from the identifier string
             # create_deep_agent expects a model object, not a string
             # Use ModelFactory for clean separation of mock vs real models
             from core.model_factory import ModelFactory
             orchestrator_model = ModelFactory.create_model()
             logger.info("model_created_via_factory", model_type=type(orchestrator_model).__name__)
-            
+
             main_runnable = create_deep_agent(
                 model=orchestrator_model,
                 system_prompt=orchestrator_system_prompt,
@@ -324,7 +322,7 @@ class GraphBuilder:
                 subagents=compiled_subagents,  # List of CompiledSubAgent and SubAgent dict instances
                 checkpointer=self.checkpointer,  # Pass checkpointer for state persistence
             )
-            
+
             # Debug: Check if the graph has the expected structure
             logger.info(
                 "create_deep_agent_result",

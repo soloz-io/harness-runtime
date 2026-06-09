@@ -14,31 +14,32 @@ References:
     - Spec: build_agent_from_definition.md (create_compiled_subagent)
 """
 
-import structlog
 from typing import Any, Dict, List
+
+import structlog
 from langchain_core.tools import BaseTool
-from langchain_core.runnables import Runnable
 
 from core.model_identifier import create_model_identifier
 
 # Import deep agents pattern components
 # Note: The spec requires deepagents package with create_deep_agent and CompiledSubAgent
 try:
-    from deepagents import CompiledSubAgent, create_deep_agent
+    from deepagents import CompiledSubAgent
     from deepagents.middleware.filesystem import FilesystemMiddleware
     from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
     from langchain.agents import create_agent
+
     from core.state_schema_builder import create_state_schema_from_config
     DEEPAGENTS_AVAILABLE = True
 except ImportError:
     # Fallback to LangGraph's create_react_agent if deepagents not available
-    from langgraph.prebuilt import create_react_agent
     DEEPAGENTS_AVAILABLE = False
     import warnings
     warnings.warn(
         "deepagents package not available. Using fallback create_react_agent. "
         "Install deepagents for full deep agent support.",
-        ImportWarning
+        ImportWarning,
+        stacklevel=2,
     )
 
 logger = structlog.get_logger(__name__)
@@ -136,9 +137,9 @@ def build_subagent(
             )
 
         # Extract brief description
-        brief_description = specialist_config.get("description", 
+        brief_description = specialist_config.get("description",
             system_prompt[:200] + "..." if len(system_prompt) > 200 else system_prompt)
-        
+
         logger.info(
             "subagent_description_extracted",
             agent_name=agent_name,
@@ -149,11 +150,11 @@ def build_subagent(
 
         # Check if state_schema is defined
         has_state_schema = "state_schema" in specialist_config
-        
+
         if has_state_schema and DEEPAGENTS_AVAILABLE:
             # PATH A: Create CompiledSubAgent with custom state schema
             return _build_compiled_subagent_with_schema(
-                agent_name, model_identifier, system_prompt, 
+                agent_name, model_identifier, system_prompt,
                 filtered_tools, specialist_config, brief_description
             )
         else:
@@ -185,17 +186,17 @@ def _build_compiled_subagent_with_schema(
     brief_description: str
 ) -> Any:  # Returns CompiledSubAgent
     """Build CompiledSubAgent with custom state schema."""
-    
+
     # Create state schema from config
     state_schema_config = specialist_config["state_schema"]
     state_schema_class = create_state_schema_from_config(state_schema_config)
-    
+
     logger.info(
         "building_compiled_subagent_with_schema",
         agent_name=agent_name,
         state_fields=list(state_schema_config.keys())
     )
-    
+
     # Build agent runnable with context_schema
     subagent_runnable = create_agent(
         model=model_identifier,
@@ -207,14 +208,14 @@ def _build_compiled_subagent_with_schema(
             PatchToolCallsMiddleware()
         ]
     )
-    
+
     # Wrap in CompiledSubAgent
     compiled_subagent = CompiledSubAgent(
         name=agent_name,
         description=brief_description,
         runnable=subagent_runnable,
     )
-    
+
     logger.info(
         "subagent_compiled_successfully",
         agent_name=agent_name,
@@ -224,7 +225,7 @@ def _build_compiled_subagent_with_schema(
         has_state_schema=True,
         return_type="CompiledSubAgent"
     )
-    
+
     return compiled_subagent
 
 
@@ -236,12 +237,12 @@ def _build_subagent_dict(
     brief_description: str
 ) -> Dict[str, Any]:
     """Build SubAgent dict (for SubAgentMiddleware to process)."""
-    
+
     logger.info(
         "building_subagent_dict",
         agent_name=agent_name
     )
-    
+
     subagent_dict = {
         "name": agent_name,
         "description": brief_description,
@@ -249,7 +250,7 @@ def _build_subagent_dict(
         "tools": filtered_tools,
         "model": model_identifier,
     }
-    
+
     logger.info(
         "subagent_dict_created",
         agent_name=agent_name,
@@ -259,5 +260,5 @@ def _build_subagent_dict(
         has_state_schema=False,
         return_type="SubAgent_dict"
     )
-    
+
     return subagent_dict

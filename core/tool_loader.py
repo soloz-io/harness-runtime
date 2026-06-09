@@ -18,8 +18,9 @@ References:
     - Design: Section 2.12 (Dynamic Tool Loading)
 """
 
-import structlog
 from typing import Any, Dict, List
+
+import structlog
 from langchain_core.tools import BaseTool
 
 logger = structlog.get_logger(__name__)
@@ -86,7 +87,7 @@ def load_tools_from_definition(
 
     for tool_def in tool_definitions:
         tool_name = tool_def.get("name", "unknown")
-        
+
         # Extract script from runtime configuration
         runtime_config = tool_def.get("runtime", {})
         tool_script = runtime_config.get("script", "")
@@ -119,7 +120,7 @@ def load_tools_from_definition(
 
             # Extract BaseTool instances from namespace
             tool_instance = None
-            for key, value in namespace.items():
+            for _key, value in namespace.items():
                 if isinstance(value, BaseTool):
                     tool_instance = value
                     break

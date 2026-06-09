@@ -24,21 +24,12 @@ Or use the modular functions directly:
 """
 
 # Main API
-from core.builder import (
-    GraphBuilder,
-    GraphBuilderError
-)
+from core.builder import GraphBuilder, GraphBuilderError
+from core.model_identifier import create_model_identifier
+from core.subagent_builder import SubAgentCompilationError, build_subagent
 
 # Modular functions
-from core.tool_loader import (
-    load_tools_from_definition,
-    ToolLoadingError
-)
-from core.model_identifier import create_model_identifier
-from core.subagent_builder import (
-    build_subagent,
-    SubAgentCompilationError
-)
+from core.tool_loader import ToolLoadingError, load_tools_from_definition
 
 __all__ = [
     # Main API

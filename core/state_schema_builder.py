@@ -5,11 +5,11 @@ This module provides functionality to dynamically create AgentState subclasses
 from schema configuration dictionaries.
 """
 
+from typing import Annotated, Any, Dict, List
+
 import structlog
-from typing import Any, Dict, List
 from langchain.agents.middleware.types import AgentState
 from langgraph.graph.message import add_messages
-from typing import Annotated
 
 logger = structlog.get_logger(__name__)
 
@@ -17,7 +17,7 @@ logger = structlog.get_logger(__name__)
 def create_state_schema_from_config(schema_config: Dict[str, Any]) -> type:
     """
     Dynamically create an AgentState subclass from schema configuration.
-    
+
     Args:
         schema_config: Dictionary defining state fields and their types
             Example:
@@ -31,10 +31,10 @@ def create_state_schema_from_config(schema_config: Dict[str, Any]) -> type:
                     "type": "dict"
                 }
             }
-    
+
     Returns:
         Dynamically created AgentState subclass with proper type annotations
-    
+
     Example:
         >>> schema = {
         ...     "proposed_changes": {
@@ -51,15 +51,15 @@ def create_state_schema_from_config(schema_config: Dict[str, Any]) -> type:
         field_count=len(schema_config),
         fields=list(schema_config.keys())
     )
-    
+
     # Build annotations dictionary
     annotations = {}
-    
+
     for field_name, field_config in schema_config.items():
         field_type = field_config.get("type", "any")
         item_type = field_config.get("item_type")
         reducer = field_config.get("reducer")
-        
+
         # Determine the Python type annotation
         if field_type == "list":
             if item_type == "dict":
@@ -70,13 +70,13 @@ def create_state_schema_from_config(schema_config: Dict[str, Any]) -> type:
                 base_type = List[int]
             else:
                 base_type = List[Any]
-            
+
             # Apply reducer if specified
             if reducer == "add_messages":
                 annotations[field_name] = Annotated[base_type, add_messages]
             else:
                 annotations[field_name] = base_type
-                
+
         elif field_type == "dict":
             annotations[field_name] = Dict[str, Any]
         elif field_type == "str":
@@ -85,25 +85,25 @@ def create_state_schema_from_config(schema_config: Dict[str, Any]) -> type:
             annotations[field_name] = int
         else:
             annotations[field_name] = Any
-        
+
         logger.debug(
             "field_annotation_created",
             field_name=field_name,
             field_type=field_type,
             has_reducer=bool(reducer)
         )
-    
+
     # Create dynamic class inheriting from AgentState
     DynamicState = type(
         "DynamicAgentState",
         (AgentState,),
         {"__annotations__": annotations}
     )
-    
+
     logger.info(
         "state_schema_created",
         class_name="DynamicAgentState",
         field_count=len(annotations)
     )
-    
+
     return DynamicState
