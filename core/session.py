@@ -24,11 +24,21 @@ class Session:
         self.execution_manager = execution_manager
         self.publisher = publisher
         self.turns = 0
-        self.model_name = (
-            agent_definition.get("config", {})
-            .get("model", {})
-            .get("model", agent_definition.get("model", "unknown"))
-        )
+        self.model_name: str | None = None
+        nodes = agent_definition.get("nodes", [])
+        if nodes:
+            node_config = nodes[0].get("config", {})
+            model_cfg = node_config.get("model", {})
+            self.model_name = (
+                model_cfg.get("model_name")
+                or model_cfg.get("model")
+            )
+        if not self.model_name:
+            raise ValueError(
+                "No model name found in agent definition. "
+                "Set config.model.model_name in the first node, "
+                "or set LLM_MODEL_NAME env var"
+            )
         self.graph_builder = GraphBuilder(
             checkpointer=execution_manager.checkpointer
         )
@@ -55,6 +65,7 @@ class Session:
             input_payload=input_payload,
             model_name=self.model_name,
             agent_definition=self.agent_definition,
+            num_turns=self.turns,
         )
 
         return result

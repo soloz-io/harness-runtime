@@ -1,9 +1,11 @@
 import json
+import logging
 import os
 import sys
 from pathlib import Path
 from typing import NoReturn
 
+import structlog
 from dotenv import load_dotenv
 
 from core.event_publisher import StdioPublisher
@@ -12,6 +14,30 @@ from core.session import Session
 
 env_path = Path(__file__).parent / ".env"
 load_dotenv(dotenv_path=env_path)
+
+# ---------------------------------------------------------------------------
+# Logging configuration
+# ---------------------------------------------------------------------------
+# File logging (dev/test debugging, disabled unless HARNESS_LOG_FILE is set)
+_log_level = os.getenv("HARNESS_LOG_LEVEL")
+_log_file = os.getenv("HARNESS_LOG_FILE")
+
+if _log_level and _log_file:
+    _log_dir = Path(_log_file).parent
+    _log_dir.mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(
+        filename=_log_file,
+        level=getattr(logging, _log_level.upper(), logging.DEBUG),
+        force=True,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+# Structured stderr logging (production stdout must be pure NDJSON)
+structlog.configure(
+    logger_factory=structlog.PrintLoggerFactory(sys.stderr),
+    cache_logger_on_first_use=True,
+)
 
 
 def main() -> None:
@@ -70,10 +96,11 @@ def main() -> None:
 
             elif msg_type == "user":
                 if session is None:
-                    publisher.publish_control_response(
-                        request_id="",
-                        subtype="error",
-                        error="Session not initialized",
+                    publisher.publish_result(
+                        session_id="",
+                        subtype="error_during_execution",
+                        is_error=True,
+                        result="Session not initialized",
                     )
                     continue
 
@@ -91,13 +118,8 @@ def main() -> None:
                         user_content = " ".join(texts)
 
                     session.run_turn(user_content=user_content)
-                except Exception as e:
-                    publisher.publish_result(
-                        session_id=session.session_id,
-                        subtype="error_during_execution",
-                        is_error=True,
-                        result=str(e),
-                    )
+                except Exception:
+                    # Executor already published error result frame
                     sys.exit(1)
 
     except KeyboardInterrupt:

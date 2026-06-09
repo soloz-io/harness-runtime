@@ -1,3 +1,4 @@
+tests/command.txt
 __pycache__
 .pytest_cache
 .venv
@@ -5,6 +6,7 @@ htmlcov
 .coverage
 .langgraph_api
 .env
+log
 uv.lock
 .ruff_cache
 deepagents_runtime.egg-info

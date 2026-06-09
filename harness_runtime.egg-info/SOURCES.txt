@@ -19,3 +19,5 @@ harness_runtime.egg-info/requires.txt
 harness_runtime.egg-info/top_level.txt
 models/__init__.py
 models/frames.py
+tests/test_db_checkpoint.py
+tests/test_protocol.py

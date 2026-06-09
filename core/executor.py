@@ -48,6 +48,7 @@ class ExecutionManager:
         input_payload: dict[str, Any],
         model_name: str,
         agent_definition: Optional[dict[str, Any]] = None,
+        num_turns: int = 1,
     ) -> str:
         start_time = time.time()
         streamed_text = ""
@@ -139,7 +140,32 @@ class ExecutionManager:
                 elif mode == "values":
                     if isinstance(data, dict):
                         msgs = data.get("messages", [])
-                        if msgs:
+                        if len(msgs) > len(final_messages):
+                            # New messages in this state update
+                            new_msgs = msgs[len(final_messages):]
+                            for msg in new_msgs:
+                                if hasattr(msg, "type") and msg.type == "ai":
+                                    content_blocks: list[dict[str, Any]] = []
+                                    text = getattr(msg, "content", "")
+                                    if text and isinstance(text, str):
+                                        content_blocks.append({
+                                            "type": "text",
+                                            "text": text,
+                                        })
+                                    tool_calls = _extract_tool_calls(msg)
+                                    for tc in tool_calls:
+                                        content_blocks.append({
+                                            "type": "tool_use",
+                                            "id": tc.get("id", f"call_{uuid.uuid4().hex[:12]}"),
+                                            "name": tc.get("name", "unknown"),
+                                            "input": tc.get("args", tc.get("input", {})),
+                                        })
+                                    if content_blocks:
+                                        self.publisher.publish_assistant(
+                                            session_id=session_id,
+                                            model=model_name,
+                                            content=content_blocks,
+                                        )
                             final_messages = msgs
 
             remaining = streamed_text
@@ -158,7 +184,7 @@ class ExecutionManager:
                 session_id=session_id,
                 subtype="success",
                 duration_ms=duration_ms,
-                num_turns=1,
+                num_turns=num_turns,
                 result=final_text,
             )
 

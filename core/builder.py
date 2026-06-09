@@ -244,7 +244,15 @@ class GraphBuilder:
             orchestrator_model_config = orchestrator_actual_config.get("model", {})
             orchestrator_provider = orchestrator_model_config.get("provider", "openai")
             # Support both "model_name" and "model" field names
-            orchestrator_model_name = orchestrator_model_config.get("model") or orchestrator_model_config.get("model", "gpt-4.1.mini")
+            orchestrator_model_name = (
+                orchestrator_model_config.get("model_name")
+                or orchestrator_model_config.get("model")
+            )
+            if not orchestrator_model_name:
+                raise GraphBuilderError(
+                    "Agent definition must specify a model "
+                    "(add config.model.model_name to the orchestrator node)"
+                )
             orchestrator_model_identifier = create_model_identifier(
                 orchestrator_provider,
                 orchestrator_model_name
@@ -308,11 +316,12 @@ class GraphBuilder:
                         model=sa.get("model")
                     )
 
-            # Initialize the model object from the identifier string
-            # create_deep_agent expects a model object, not a string
-            # Use ModelFactory for clean separation of mock vs real models
+            # Initialize the model object based on agent definition config
             from core.model_factory import ModelFactory
-            orchestrator_model = ModelFactory.create_model()
+            orchestrator_model = ModelFactory.create_model(
+                provider=orchestrator_provider,
+                model_name=orchestrator_model_name,
+            )
             logger.info("model_created_via_factory", model_type=type(orchestrator_model).__name__)
 
             main_runnable = create_deep_agent(

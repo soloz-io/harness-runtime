@@ -1,88 +1,72 @@
 """Model factory for creating LLM instances based on configuration."""
 
 import os
-from typing import Any
+from typing import Any, Optional
+
+_MODEL_PREFIX_MAP = {
+    "deepseek": "openai",
+    "gpt": "openai",
+    "o1": "openai",
+    "claude": "anthropic",
+}
 
 
-def _is_mock_mode() -> bool:
-    return os.getenv("USE_MOCK_LLM", "false").lower() == "true"
+def _detect_provider(model_name: str) -> str:
+    """Detect the LLM provider from the model name prefix."""
+    if not model_name:
+        raise ValueError("model_name is required to detect provider")
+    prefix = model_name.split("-")[0].lower()
+    result = _MODEL_PREFIX_MAP.get(prefix)
+    if not result:
+        raise ValueError(
+            f"Cannot detect provider from model name '{model_name}'. "
+            f"Set LLM_PROVIDER env var or use a known model prefix "
+            f"({', '.join(sorted(_MODEL_PREFIX_MAP))})"
+        )
+    return result
+
+
+def _create_model_for_provider(provider: str, model_name: str, api_key: str) -> Any:
+    """Create the appropriate LLM model based on provider and model name."""
+    kwargs: dict[str, Any] = {"model": model_name, "api_key": api_key}
+
+    if provider == "anthropic":
+        from langchain_anthropic import ChatAnthropic
+        return ChatAnthropic(**kwargs)
+    elif provider == "openai":
+        from langchain_openai import ChatOpenAI
+        return ChatOpenAI(**kwargs)
+    else:
+        raise ValueError(f"Unsupported provider: {provider}")
 
 
 class ModelFactory:
     """Factory for creating LLM model instances."""
 
     @staticmethod
-    def create_model() -> Any:
-        if _is_mock_mode():
-            return ModelFactory._create_mock_model()
-        else:
-            return ModelFactory._create_real_model()
+    def create_model(
+        provider: Optional[str] = None,
+        model_name: Optional[str] = None,
+    ) -> Any:
+        # Env vars take precedence over agent definition
+        model = os.environ.get("LLM_MODEL_NAME") or model_name
+        if not model:
+            raise ValueError(
+                "No model name specified. Set LLM_MODEL_NAME env var "
+                "or provide model_name in agent definition"
+            )
 
-    @staticmethod
-    def _create_mock_model() -> Any:
-        from tests.utils.mock_workflow import get_mock_model_with_event_replay
-        return get_mock_model_with_event_replay()
+        # Model name determines provider (agent definition's provider field
+        # may be incorrect for cross-provider models like deepseek via OpenAI API)
+        prov = os.environ.get("LLM_PROVIDER") or _detect_provider(model)
 
-    @staticmethod
-    def _create_real_model() -> Any:
-        from langchain_openai import ChatOpenAI
-        model_name = os.getenv("LLM_MODEL_NAME", "gpt-4o-mini")
-        return ChatOpenAI(model=model_name)
+        api_key = (os.environ.get("OPENAI_API_KEY")
+                   or os.environ.get("DEEPSEEK_API_KEY")
+                   or os.environ.get("ANTHROPIC_API_KEY"))
+        if not api_key:
+            raise ValueError(
+                "No API key found. Set OPENAI_API_KEY, DEEPSEEK_API_KEY, "
+                "or ANTHROPIC_API_KEY"
+            )
 
-    @staticmethod
-    def is_mock_mode() -> bool:
-        return _is_mock_mode()
-
-
-class ExecutionStrategy:
-    """Base class for execution strategies."""
-
-    def execute_workflow(self, graph_builder: Any, agent_definition: Any,
-                         job_id: str, trace_id: str) -> Any:
-        raise NotImplementedError
-
-
-class RealExecutionStrategy(ExecutionStrategy):
-    def __init__(self, execution_manager: Any) -> None:
-        self.execution_manager = execution_manager
-
-    def execute_workflow(self, graph_builder: Any, agent_definition: Any,
-                         job_id: str, trace_id: str) -> Any:
-        compiled_graph = graph_builder.build_from_definition(agent_definition)
-        input_payload = agent_definition.get("input_payload", {"messages": []})
-        result = self.execution_manager.execute(
-            graph=compiled_graph,
-            session_id=job_id,
-            input_payload=input_payload,
-            model_name=agent_definition.get("model", "unknown"),
-            agent_definition=agent_definition,
-        )
-        return result
-
-
-class MockExecutionStrategy(ExecutionStrategy):
-    def __init__(self, execution_manager: Any) -> None:
-        self.execution_manager = execution_manager
-
-    def execute_workflow(self, graph_builder: Any, agent_definition: Any,
-                         job_id: str, trace_id: str) -> Any:
-        from tests.utils.mock_workflow import handle_mock_execution
-        return handle_mock_execution(
-            self.execution_manager,
-            job_id,
-            trace_id,
-            agent_definition,
-        )
-
-
-class ExecutionFactory:
-    """Factory for creating execution strategies."""
-
-    @staticmethod
-    def create_strategy(execution_manager: Any = None) -> ExecutionStrategy:
-        if execution_manager is None:
-            raise ValueError("Execution manager is required for all execution strategies")
-        if _is_mock_mode():
-            return MockExecutionStrategy(execution_manager)
-        else:
-            return RealExecutionStrategy(execution_manager)
+        return _create_model_for_provider(prov, model, api_key=api_key)
