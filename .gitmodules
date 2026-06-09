@@ -1,0 +1,3 @@
+[submodule "tests/mock"]
+	path = tests/mock
+	url = https://github.com/bizmatters/spec-engine.git

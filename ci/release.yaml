@@ -1,0 +1,87 @@
+# deepagents-runtime ci/release.yaml
+# Release pipeline configuration for centralized multi-environment deployments
+
+release:
+  # Ordered list of environments for deployment progression
+  environments:
+    - dev
+    - staging
+    - production
+  
+  # Promotion rules between environments
+  promotion:
+    dev_to_staging: manual        # manual | automatic
+    staging_to_production: manual
+  
+  # Artifact configuration
+  artifacts:
+    registry: ghcr.io
+    retention_days: 30
+    
+  # Testing configuration - both PR and main branch use identical infrastructure
+  testing:
+    validation_mode: preview      # Both PR and main branch use preview validation mode (GitHub runners + Kind)
+    bootstrap_mode: preview       # Both use preview mode bootstrap for consistent testing
+
+# Environment-specific deployment settings
+environments:
+  dev:
+    auto_deploy: true             # Automatically deploy after main branch success
+    health_check_timeout: 300     # 5 minutes
+    rollback_on_failure: true
+    
+  staging:
+    auto_deploy: false            # Requires manual promotion gate
+    health_check_timeout: 600     # 10 minutes
+    rollback_on_failure: true
+    smoke_tests: true             # Run additional smoke tests
+    
+  production:
+    auto_deploy: false            # Requires manual promotion gate
+    health_check_timeout: 900     # 15 minutes
+    rollback_on_failure: true
+    smoke_tests: true
+    performance_tests: true       # Run performance validation
+
+# Deployment settings
+deployment:
+  strategy: rolling_update        # rolling_update | blue_green
+  max_unavailable: 1
+  max_surge: 1
+  
+  # Health checks
+  readiness_probe:
+    path: "/ready"
+    initial_delay: 30
+    timeout: 5
+    
+  liveness_probe:
+    path: "/health"
+    initial_delay: 60
+    timeout: 5
+
+# Notification settings
+notifications:
+  slack:
+    enabled: true
+    channel: "#deployments"
+    events:
+      - deployment_success
+      - deployment_failure
+      - promotion_gate_created
+      - promotion_gate_approved
+      
+  github:
+    enabled: true
+    events:
+      - deployment_status
+      - promotion_gate_status
+
+# Rollback configuration
+rollback:
+  enabled: true
+  automatic_triggers:
+    - health_check_failure
+    - performance_degradation
+  manual_approval_required: false  # For dev environment
+  retention_count: 5               # Keep last 5 deployments for rollback
