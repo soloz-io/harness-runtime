@@ -33,6 +33,8 @@ MOCK_DATA = Path(__file__).parent / "mock" / "simple-bug-fix-invoke-requests.jso
 _MISSING: list[str] = []
 if not os.environ.get("OPENAI_API_KEY") and not os.environ.get("DEEPSEEK_API_KEY") and not os.environ.get("ANTHROPIC_API_KEY"):
     _MISSING.append("OPENAI_API_KEY, DEEPSEEK_API_KEY, or ANTHROPIC_API_KEY")
+if not os.environ.get("DATABASE_URL"):
+    _MISSING.append("DATABASE_URL (PostgreSQL connection string)")
 if _MISSING:
     pytest.fail("Required environment variables:\n  " + "\n  ".join(_MISSING))
 
@@ -56,6 +58,12 @@ def harness(artifact_dir: Path) -> subprocess.Popen[bytes]:
     log_dir = Path(__file__).parent.parent / "log"
     log_dir.mkdir(parents=True, exist_ok=True)
 
+    deepseek_key = os.environ.get("DEEPSEEK_API_KEY") or ""
+    openai_key = os.environ.get("OPENAI_API_KEY") or ""
+    api_key = deepseek_key or openai_key
+    if not api_key:
+        pytest.fail("No API key found")
+
     proc = subprocess.Popen(
         [sys.executable, str(cli_path)],
         stdin=subprocess.PIPE,
@@ -66,14 +74,8 @@ def harness(artifact_dir: Path) -> subprocess.Popen[bytes]:
             "PYTHONUNBUFFERED": "1",
             "HARNESS_LOG_FILE": str(log_dir / "harness-cli.log"),
             "HARNESS_LOG_LEVEL": "DEBUG",
-            "LLM_MODEL_NAME": os.environ.get("LLM_MODEL_NAME", "deepseek-v4-pro"),
-            "OPENAI_API_KEY": os.environ.get("DEEPSEEK_API_KEY")
-                or os.environ.get("OPENAI_API_KEY")
-                or "",
-            "DATABASE_URL": os.environ.get("DATABASE_URL")
-                or "postgresql://waypoint:waypoint@localhost:5433/waypoint_test",
-            "OPENAI_BASE_URL": os.environ.get("OPENAI_BASE_URL")
-                or "https://api.deepseek.com",
+            "OPENAI_API_KEY": api_key,
+            "DATABASE_URL": os.environ["DATABASE_URL"],
         },
     )
 
@@ -152,8 +154,7 @@ def _save_artifacts(artifact_dir: Path, frames: list[dict[str, Any]], stderr: by
 
 
 def _count_checkpoints(session_id: str) -> int:
-    db_url = os.environ.get("DATABASE_URL") or "postgresql://waypoint:waypoint@localhost:5433/waypoint_test"
-    with psycopg.connect(db_url) as conn:
+    with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT COUNT(*) FROM checkpoints WHERE thread_id = %s",
@@ -204,7 +205,6 @@ def test_initialize_and_single_turn(harness: subprocess.Popen[bytes], artifact_d
     assert frames[-1]["type"] == "result"
     assert frames[-1]["session_id"] == session_id
 
-    db_url = os.environ.get("DATABASE_URL") or "postgresql://waypoint:waypoint@localhost:5433/waypoint_test"
     _count_checkpoints(session_id)
 
 
