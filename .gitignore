@@ -1,4 +1,5 @@
 tests/command.txt
+references
 __pycache__
 .pytest_cache
 .venv

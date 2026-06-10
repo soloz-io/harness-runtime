@@ -1,5 +1,17 @@
-"""Test utilities for harness-runtime."""
+"""Test utilities for deepagents-runtime."""
 
-# No mock LLM utilities — LiteLLM parity:
-# Protocol tests use fake_server.py (pure stdlib echo server).
-# DB integration tests use real LLM with real API keys.
+from .mock_workflow import (
+    get_test_model,
+    get_mock_model_with_event_replay,
+    setup_mock_workflow_for_test,
+    cleanup_mock_workflow,
+    is_mock_mode,
+)
+
+__all__ = [
+    "get_test_model",
+    "get_mock_model_with_event_replay",
+    "setup_mock_workflow_for_test",
+    "cleanup_mock_workflow",
+    "is_mock_mode",
+]

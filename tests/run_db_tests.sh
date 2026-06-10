@@ -12,7 +12,7 @@ echo ""
 echo "=== Running DB integration tests ==="
 echo "  DATABASE_URL: ${DATABASE_URL:+set}"
 echo "  OPENAI_API_KEY: ${OPENAI_API_KEY:+set}"
-echo "  LLM_MODEL_NAME: ${LLM_MODEL_NAME:-deepseek-v4-pro (agent definition default)}"
+echo "  LLM_MODEL_NAME: ${LLM_MODEL_NAME:-deepseek-v4-flash (agent definition default)}"
 echo ""
 cd ..
 python3 -m pytest tests/test_db_checkpoint.py -v "$@"
