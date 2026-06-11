@@ -1,6 +1,6 @@
 [project]
 name = "harness-runtime"
-version = "0.1.0"
+version = "0.1.2"
 description = "LangGraph Agent Execution Engine — stdio subprocess pattern"
 authors = [
     {name = "Bizmatters Team"}

@@ -16,3 +16,7 @@ codebase.md
 .ruff_cache
 deepagents_runtime.egg-info
 tests/**/outputs/**
+dist
+.mypy_cache
+log
+harness_runtime.egg-info

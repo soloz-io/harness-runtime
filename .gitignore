@@ -1,4 +1,6 @@
 tests/command.txt
+dist
+.mypy_cache
 references
 __pycache__
 .pytest_cache
