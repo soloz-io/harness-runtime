@@ -41,6 +41,15 @@ structlog.configure(
 
 
 def main() -> None:
+    # Disable deepagents' built-in OpenAI Responses API default.
+    # The Responses API doesn't work with non-OpenAI models (e.g. deepseek
+    # via OpenAI-compatible endpoint), causing 404 on sub-agent delegation.
+    from deepagents.profiles.provider import ProviderProfile, register_provider_profile
+    register_provider_profile(
+        "openai",
+        ProviderProfile(init_kwargs={"use_responses_api": False}),
+    )
+
     database_url = os.getenv("DATABASE_URL")
     if not database_url:
         _error_exit("DATABASE_URL environment variable is required", 2)
