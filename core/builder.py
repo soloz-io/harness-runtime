@@ -260,6 +260,11 @@ class GraphBuilder:
 
             orchestrator_system_prompt = orchestrator_actual_config.get("system_prompt", "")
 
+            # Extract optional orchestrator-level deepagents features
+            orchestrator_response_format = orchestrator_actual_config.get("response_format")
+            orchestrator_state_schema = orchestrator_actual_config.get("state_schema")
+            orchestrator_context_schema = orchestrator_actual_config.get("context_schema")
+
             # Extract and resolve orchestrator tools
             orchestrator_tool_names = orchestrator_actual_config.get("tools", [])
             orchestrator_tools = []
@@ -284,7 +289,10 @@ class GraphBuilder:
                 requested_tools=orchestrator_tool_names,
                 resolved_tools=len(orchestrator_tools),
                 tool_names=[t.name if hasattr(t, 'name') else str(t) for t in orchestrator_tools],
-                has_task_tool_instruction="task()" in orchestrator_system_prompt
+                has_task_tool_instruction="task()" in orchestrator_system_prompt,
+                has_response_format=orchestrator_response_format is not None,
+                has_state_schema=orchestrator_state_schema is not None,
+                has_context_schema=orchestrator_context_schema is not None,
             )
 
             # Step 6: Assemble the main graph using create_deep_agent
@@ -316,21 +324,34 @@ class GraphBuilder:
                         model=sa.get("model")
                     )
 
-            # Initialize the model object based on agent definition config
+            # Resolve model identifier (string) so create_deep_agent can
+            # resolve the model + apply HarnessProfile internally.
             from core.model_factory import ModelFactory
-            orchestrator_model = ModelFactory.create_model(
+            orchestrator_model_identifier = ModelFactory.resolve_model_identifier(
                 provider=orchestrator_provider,
                 model_name=orchestrator_model_name,
             )
-            logger.info("model_created_via_factory", model_type=type(orchestrator_model).__name__)
-
-            main_runnable = create_deep_agent(
-                model=orchestrator_model,
-                system_prompt=orchestrator_system_prompt,
-                tools=orchestrator_tools,  # Pass resolved orchestrator tools
-                subagents=compiled_subagents,  # List of CompiledSubAgent and SubAgent dict instances
-                checkpointer=self.checkpointer,  # Pass checkpointer for state persistence
+            logger.info(
+                "model_identifier_resolved",
+                identifier=orchestrator_model_identifier,
             )
+
+            # Build create_deep_agent kwargs, adding optional deepagents features
+            deep_agent_kwargs: dict[str, Any] = {
+                "model": orchestrator_model_identifier,
+                "system_prompt": orchestrator_system_prompt,
+                "tools": orchestrator_tools,
+                "subagents": compiled_subagents,
+                "checkpointer": self.checkpointer,
+            }
+            if orchestrator_response_format is not None:
+                deep_agent_kwargs["response_format"] = orchestrator_response_format
+            if orchestrator_state_schema is not None:
+                deep_agent_kwargs["state_schema"] = orchestrator_state_schema
+            if orchestrator_context_schema is not None:
+                deep_agent_kwargs["context_schema"] = orchestrator_context_schema
+
+            main_runnable = create_deep_agent(**deep_agent_kwargs)
 
             # Debug: Check if the graph has the expected structure
             logger.info(

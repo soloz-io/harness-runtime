@@ -101,7 +101,7 @@ def build_subagent(
         model_config = specialist_config.get("model", {})
         provider = model_config.get("provider", "openai")
         # Support both "model_name" and "model" field names
-        model_name = model_config.get("model") or model_config.get("model", "gpt-4.1.mini")
+        model_name = model_config.get("model") or model_config.get("model_name", "gpt-4.1.mini")
 
         # Create model identifier
         model_identifier = create_model_identifier(provider, model_name)
@@ -148,6 +148,9 @@ def build_subagent(
             description_preview=brief_description[:100] if brief_description else "EMPTY"
         )
 
+        # Extract optional response_format for structured output
+        response_format = specialist_config.get("response_format")
+
         # Check if state_schema is defined
         has_state_schema = "state_schema" in specialist_config
 
@@ -155,13 +158,14 @@ def build_subagent(
             # PATH A: Create CompiledSubAgent with custom state schema
             return _build_compiled_subagent_with_schema(
                 agent_name, model_identifier, system_prompt,
-                filtered_tools, specialist_config, brief_description
+                filtered_tools, specialist_config, brief_description,
+                response_format
             )
         else:
             # PATH B: Return SubAgent dict (let SubAgentMiddleware handle it)
             return _build_subagent_dict(
                 agent_name, model_identifier, system_prompt,
-                filtered_tools, brief_description
+                filtered_tools, brief_description, response_format
             )
 
     except Exception as e:
@@ -183,7 +187,8 @@ def _build_compiled_subagent_with_schema(
     system_prompt: str,
     filtered_tools: List[BaseTool],
     specialist_config: Dict[str, Any],
-    brief_description: str
+    brief_description: str,
+    response_format: Any = None,
 ) -> Any:  # Returns CompiledSubAgent
     """Build CompiledSubAgent with custom state schema."""
 
@@ -194,20 +199,25 @@ def _build_compiled_subagent_with_schema(
     logger.info(
         "building_compiled_subagent_with_schema",
         agent_name=agent_name,
-        state_fields=list(state_schema_config.keys())
+        state_fields=list(state_schema_config.keys()),
+        has_response_format=response_format is not None,
     )
 
-    # Build agent runnable with context_schema
-    subagent_runnable = create_agent(
-        model=model_identifier,
-        system_prompt=system_prompt,
-        tools=filtered_tools,
-        context_schema=state_schema_class,
-        middleware=[
+    # Build agent runnable with context_schema and optional response_format
+    create_agent_kwargs: dict[str, Any] = {
+        "model": model_identifier,
+        "system_prompt": system_prompt,
+        "tools": filtered_tools,
+        "context_schema": state_schema_class,
+        "middleware": [
             FilesystemMiddleware(),
             PatchToolCallsMiddleware()
-        ]
-    )
+        ],
+    }
+    if response_format is not None:
+        create_agent_kwargs["response_format"] = response_format
+
+    subagent_runnable = create_agent(**create_agent_kwargs)
 
     # Wrap in CompiledSubAgent
     compiled_subagent = CompiledSubAgent(
@@ -234,22 +244,26 @@ def _build_subagent_dict(
     model_identifier: str,
     system_prompt: str,
     filtered_tools: List[BaseTool],
-    brief_description: str
+    brief_description: str,
+    response_format: Any = None,
 ) -> Dict[str, Any]:
     """Build SubAgent dict (for SubAgentMiddleware to process)."""
 
     logger.info(
         "building_subagent_dict",
-        agent_name=agent_name
+        agent_name=agent_name,
+        has_response_format=response_format is not None,
     )
 
-    subagent_dict = {
+    subagent_dict: dict[str, Any] = {
         "name": agent_name,
         "description": brief_description,
         "system_prompt": system_prompt,
         "tools": filtered_tools,
         "model": model_identifier,
     }
+    if response_format is not None:
+        subagent_dict["response_format"] = response_format
 
     logger.info(
         "subagent_dict_created",

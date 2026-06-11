@@ -1,7 +1,9 @@
-"""Model factory for creating LLM instances based on configuration."""
+"""Model factory for creating LLM instances and model identifiers based on configuration."""
 
 import os
 from typing import Any, Optional
+
+from core.model_identifier import create_model_identifier
 
 _MODEL_PREFIX_MAP = {
     "deepseek": "openai",
@@ -42,6 +44,33 @@ def _create_model_for_provider(provider: str, model_name: str, api_key: str) -> 
 
 class ModelFactory:
     """Factory for creating LLM model instances."""
+
+    @staticmethod
+    def resolve_model_identifier(
+        provider: Optional[str] = None,
+        model_name: Optional[str] = None,
+    ) -> str:
+        """Resolve model identifier string, checking env var overrides first.
+
+        Returns a "provider:model_name" string suitable for passing to
+        deepagents' create_deep_agent(model=...), which enables HarnessProfile
+        resolution.
+
+        Args:
+            provider: Provider name from config (e.g. "openai", "anthropic").
+            model_name: Model name from config (e.g. "gpt-4.1-mini").
+
+        Returns:
+            Model identifier string in "provider:model_name" format.
+        """
+        model = os.environ.get("LLM_MODEL_NAME") or model_name
+        if not model:
+            raise ValueError(
+                "No model name specified. Set LLM_MODEL_NAME env var "
+                "or provide model_name in agent definition"
+            )
+        prov = os.environ.get("LLM_PROVIDER") or provider or _detect_provider(model)
+        return create_model_identifier(prov, model)
 
     @staticmethod
     def create_model(
