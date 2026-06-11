@@ -140,12 +140,16 @@ def build_subagent(
         brief_description = specialist_config.get("description",
             system_prompt[:200] + "..." if len(system_prompt) > 200 else system_prompt)
 
+        # Extract response_format (ToolStrategy schema dict or raw dict)
+        response_format = specialist_config.get("response_format")
+
         logger.info(
             "subagent_description_extracted",
             agent_name=agent_name,
             has_description=bool(specialist_config.get("description")),
             description_length=len(brief_description),
-            description_preview=brief_description[:100] if brief_description else "EMPTY"
+            description_preview=brief_description[:100] if brief_description else "EMPTY",
+            has_response_format=response_format is not None,
         )
 
         # Check if state_schema is defined
@@ -161,7 +165,7 @@ def build_subagent(
             # PATH B: Return SubAgent dict (let SubAgentMiddleware handle it)
             return _build_subagent_dict(
                 agent_name, model_identifier, system_prompt,
-                filtered_tools, brief_description
+                filtered_tools, brief_description, response_format
             )
 
     except Exception as e:
@@ -206,7 +210,8 @@ def _build_compiled_subagent_with_schema(
         middleware=[
             FilesystemMiddleware(),
             PatchToolCallsMiddleware()
-        ]
+        ],
+        response_format=specialist_config.get("response_format"),
     )
 
     # Wrap in CompiledSubAgent
@@ -234,7 +239,8 @@ def _build_subagent_dict(
     model_identifier: str,
     system_prompt: str,
     filtered_tools: List[BaseTool],
-    brief_description: str
+    brief_description: str,
+    response_format: Any = None,
 ) -> Dict[str, Any]:
     """Build SubAgent dict (for SubAgentMiddleware to process)."""
 
@@ -243,13 +249,15 @@ def _build_subagent_dict(
         agent_name=agent_name
     )
 
-    subagent_dict = {
+    subagent_dict: Dict[str, Any] = {
         "name": agent_name,
         "description": brief_description,
         "system_prompt": system_prompt,
         "tools": filtered_tools,
         "model": model_identifier,
     }
+    if response_format is not None:
+        subagent_dict["response_format"] = response_format
 
     logger.info(
         "subagent_dict_created",

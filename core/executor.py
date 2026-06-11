@@ -53,6 +53,7 @@ class ExecutionManager:
         start_time = time.time()
         streamed_text = ""
         final_messages = []
+        last_structured_response = None
 
         config: RunnableConfig = {"configurable": {"thread_id": session_id}}
 
@@ -142,6 +143,8 @@ class ExecutionManager:
                         msgs = data.get("messages", [])
                         if len(msgs) > len(final_messages):
                             final_messages = msgs
+                        if "structured_response" in data:
+                            last_structured_response = data["structured_response"]
 
             remaining = streamed_text
             streamed_text = ""
@@ -161,6 +164,7 @@ class ExecutionManager:
                 duration_ms=duration_ms,
                 num_turns=num_turns,
                 result=final_text,
+                structured_response=last_structured_response,
             )
 
             return final_text

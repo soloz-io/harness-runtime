@@ -63,6 +63,7 @@ from core.tool_loader import load_tools_from_definition
 # Note: The spec requires deepagents package with create_deep_agent and CompiledSubAgent
 try:
     from deepagents import create_deep_agent
+    from langchain.agents.structured_output import ToolStrategy
 except ImportError as e:
     raise ImportError(
         "deepagents package is required but not installed. "
@@ -287,7 +288,17 @@ class GraphBuilder:
                 has_task_tool_instruction="task()" in orchestrator_system_prompt
             )
 
-            # Step 6: Assemble the main graph using create_deep_agent
+            # Step 6: Extract response_format from orchestrator config
+            response_format = None
+            response_format_config = orchestrator_actual_config.get("response_format")
+            if response_format_config and isinstance(response_format_config, dict):
+                response_format = ToolStrategy(schema=response_format_config)
+                logger.info(
+                    "orchestrator_response_format_configured",
+                    schema_keys=list(response_format_config.get("properties", {}).keys()) if isinstance(response_format_config, dict) else []
+                )
+
+            # Step 7: Assemble the main graph using create_deep_agent
             # Use create_deep_agent with the list of CompiledSubAgent instances
             logger.info(
                 "creating_deep_agent",
@@ -301,7 +312,8 @@ class GraphBuilder:
                     type(sa).__name__ if not isinstance(sa, dict) else "dict"
                     for sa in compiled_subagents
                 ],
-                has_checkpointer=self.checkpointer is not None
+                has_checkpointer=self.checkpointer is not None,
+                has_response_format=response_format is not None
             )
 
             # Log detailed subagent info for debugging
@@ -330,6 +342,7 @@ class GraphBuilder:
                 tools=orchestrator_tools,  # Pass resolved orchestrator tools
                 subagents=compiled_subagents,  # List of CompiledSubAgent and SubAgent dict instances
                 checkpointer=self.checkpointer,  # Pass checkpointer for state persistence
+                response_format=response_format,  # Pass structured output strategy
             )
 
             # Debug: Check if the graph has the expected structure

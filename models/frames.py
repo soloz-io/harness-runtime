@@ -133,6 +133,7 @@ class ResultFrame:
     total_cost_usd: float = 0.0
     usage: dict[str, Any] = field(default_factory=dict)
     result: Optional[str] = None
+    structured_response: Optional[Any] = None
 
 
 @dataclass
