@@ -28,9 +28,9 @@ def _detect_provider(model_name: str) -> str:
     return result
 
 
-def _create_model_for_provider(provider: str, model_name: str, api_key: str) -> Any:
+def _create_model_for_provider(provider: str, model_name: str, api_key: str, **extra_kwargs: Any) -> Any:
     """Create the appropriate LLM model based on provider and model name."""
-    kwargs: dict[str, Any] = {"model": model_name, "api_key": api_key}
+    kwargs: dict[str, Any] = {"model": model_name, "api_key": api_key, **extra_kwargs}
 
     if provider == "anthropic":
         from langchain_anthropic import ChatAnthropic
@@ -76,6 +76,7 @@ class ModelFactory:
     def create_model(
         provider: Optional[str] = None,
         model_name: Optional[str] = None,
+        **extra_kwargs: Any,
     ) -> Any:
         # Env vars take precedence over agent definition
         model = os.environ.get("LLM_MODEL_NAME") or model_name
@@ -98,4 +99,4 @@ class ModelFactory:
                 "or ANTHROPIC_API_KEY"
             )
 
-        return _create_model_for_provider(prov, model, api_key=api_key)
+        return _create_model_for_provider(prov, model, api_key=api_key, **extra_kwargs)
