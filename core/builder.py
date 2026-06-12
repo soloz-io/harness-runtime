@@ -55,6 +55,7 @@ from typing import Any, Dict, List
 import structlog
 from langchain_core.runnables import Runnable
 
+from core.custom_graph_builder import build_custom_state_graph, is_custom_topology
 from core.model_identifier import create_model_identifier
 from core.subagent_builder import build_subagent
 from core.tool_loader import load_tools_from_definition
@@ -119,7 +120,7 @@ class GraphBuilder:
         logger.info("graph_builder_initialized", has_checkpointer=checkpointer is not None)
 
 
-    def build_from_definition(self, definition: Dict[str, Any]) -> Runnable:
+    def build_from_definition(self, definition: Dict[str, Any]) -> Runnable[Any, Any]:
         """
         Build a complete LangGraph graph from an agent definition.
 
@@ -185,6 +186,15 @@ class GraphBuilder:
             # Step 1: Load all tools
             tool_definitions = definition.get("tool_definitions", [])
             available_tools = load_tools_from_definition(tool_definitions)
+
+            # Step 1b: Check for custom topology (ADR-005 Path B escape hatch)
+            # When present, compile a native StateGraph instead of the default
+            # create_deep_agent star topology.
+            if is_custom_topology(definition):
+                logger.info("detected_custom_topology_building_state_graph")
+                return build_custom_state_graph(
+                    definition, available_tools, self.checkpointer,
+                )
 
             # Step 2: Parse nodes from definition
             nodes = definition.get("nodes", [])
