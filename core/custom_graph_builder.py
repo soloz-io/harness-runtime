@@ -13,7 +13,8 @@ create_agent() for individual nodes (preserving essential middleware).
 
 Key architectural decisions:
 - LangGraph routers are pure functions and cannot mutate state. Budget counters
-  are incremented via a dedicated __increment_budget__ pass-through node.
+  are incremented via dedicated per-target pass-through nodes
+  (__increment_budget_{target}__) so multiple conditional edges do not conflict.
 - Each node gets a reconstructed middleware stack [TodoListMiddleware,
   FilesystemMiddleware, PatchToolCallsMiddleware] matching the essential subset
   of create_deep_agent()'s assembly.
@@ -27,7 +28,7 @@ from typing import Any, Dict, List
 
 import structlog
 from langchain_core.runnables import Runnable
-from langgraph.graph import StateGraph
+from langgraph.graph import END, StateGraph
 
 # Import deepagents components for individual agent node construction
 try:
@@ -103,11 +104,12 @@ def build_state_schema(definition: Dict[str, Any]) -> type:
 
 def build_node_middleware(node_config: Dict[str, Any]) -> list[Any]:
     """Reconstruct the essential deepagents middleware stack for a single node."""
-    return [
+    middleware: list[Any] = [
         TodoListMiddleware(),
         FilesystemMiddleware(),
         PatchToolCallsMiddleware(),
     ]
+    return middleware
 
 
 def compile_node(
@@ -134,15 +136,19 @@ def compile_node(
             logger.warning("node_tool_not_found", node=node.get("id", "unknown"), tool_name=name)
 
     middleware = build_node_middleware(config)
+    response_format = config.get("response_format")
 
-    return create_agent(
-        model,
-        system_prompt=config.get("system_prompt", ""),
-        tools=tools,
-        middleware=middleware,
-        checkpointer=checkpointer,
-        state_schema=state_schema,
-    )
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "system_prompt": config.get("system_prompt", ""),
+        "tools": tools,
+        "middleware": middleware,
+        "checkpointer": checkpointer,
+        "state_schema": state_schema,
+    }
+    if response_format is not None:
+        kwargs["response_format"] = response_format
+    return create_agent(**kwargs)
 
 
 # ------------------------------------------------------------------ #
@@ -151,15 +157,27 @@ def compile_node(
 
 
 def create_edge_router(edge_def: Dict[str, Any]) -> Any:
-    """Return a pure LangGraph router function for a conditional edge."""
-    condition: str = edge_def.get("condition", "")
+    """Return a pure LangGraph router function for a conditional edge.
+
+    When the condition evaluates to True and mentions retry_count, routes
+    through a per-target budget increment node. Otherwise routes to target
+    directly. On False or error, routes to alt_target.
+    """
+    target: str = edge_def["target"]
     alt_target: str = edge_def.get("alt_target", "__end__")
+    if alt_target == "__end__":
+        alt_target = END
+    condition: str = edge_def.get("condition", "")
 
     def router(state: dict[str, Any]) -> str:
+        if not condition:
+            return target
         try:
             result: Any = eval(condition, {"__builtins__": {}}, {"state": state})
             if result:
-                return "__increment_budget__"
+                if "retry_count" in condition:
+                    return f"__increment_budget_{target}__"
+                return target
         except Exception as e:
             logger.error("edge_condition_evaluation_failed", condition=condition, error=str(e))
         return alt_target
@@ -182,9 +200,32 @@ def build_custom_state_graph(
     edges = definition.get("edges", [])
     state_schema = build_state_schema(definition)
 
-    graph: StateGraph[Any] = StateGraph(state_schema)
+    graph = StateGraph(state_schema)  # type: ignore  # dynamic subclass of DeepAgentState satisfies StateLike
 
-    # 1. Add all definition nodes
+    # 1. Add per-target budget increment nodes for conditional edges
+    #    (created before definition nodes to guarantee they exist at compile time)
+    added_budget_nodes: set[str] = set()
+    for edge in edges:
+        if "condition" not in edge:
+            continue
+        if "retry_count" not in edge.get("condition", ""):
+            continue
+        target = edge.get("target") or edge.get("to")
+        budget_node_name = f"__increment_budget_{target}__"
+        if budget_node_name in added_budget_nodes:
+            continue
+
+        def _make_increment_budget() -> Any:
+            def increment_budget_node(state: dict[str, Any]) -> dict[str, Any]:
+                return {"retry_count": state.get("retry_count", 0) + 1}
+            return increment_budget_node
+
+        graph.add_node(budget_node_name, _make_increment_budget())
+        graph.add_edge(budget_node_name, target)
+        added_budget_nodes.add(budget_node_name)
+        logger.info("custom_graph_budget_node_added", name=budget_node_name, target=target)
+
+    # 2. Add all definition nodes
     for node in nodes:
         node_id = node.get("id") or node.get("name")
         if not node_id:
@@ -193,14 +234,6 @@ def build_custom_state_graph(
         graph.add_node(node_id, runnable)
         logger.info("custom_graph_node_added", node_id=node_id, type=node.get("type"))
 
-    # 2. Add the invisible budget increment node (pure state mutation)
-    def increment_budget_node(state: dict[str, Any]) -> dict[str, Any]:
-        current = state.get("retry_count", 0)
-        return {"retry_count": current + 1}
-
-    graph.add_node("__increment_budget__", increment_budget_node)  # type: ignore[type-var]
-    logger.info("custom_graph_budget_node_added")
-
     # 3. Set entry point
     first_id = nodes[0].get("id") or nodes[0].get("name")
     graph.set_entry_point(first_id)
@@ -208,25 +241,24 @@ def build_custom_state_graph(
     # 4. Add edges
     for edge in edges:
         source = edge.get("source") or edge.get("from")
-        target = edge.get("target") or edge.get("to")
 
         if "condition" in edge:
             router = create_edge_router(edge)
             graph.add_conditional_edges(source, router)
-            graph.add_edge("__increment_budget__", target)
             logger.info(
                 "custom_graph_conditional_edge",
                 source=source,
-                target=target,
                 condition=edge.get("condition"),
+                alt_target=edge.get("alt_target"),
             )
         else:
+            target = edge.get("target") or edge.get("to")
             graph.add_edge(source, target)
             logger.info("custom_graph_edge", source=source, target=target)
 
     logger.info(
         "custom_graph_assembled",
-        node_count=len(nodes) + 1,
+        node_count=len(nodes) + len(added_budget_nodes),
         edge_count=len(edges),
     )
 
