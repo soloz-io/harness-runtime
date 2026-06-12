@@ -360,6 +360,16 @@ class GraphBuilder:
                 "checkpointer": self.checkpointer,
             }
             if orchestrator_response_format is not None:
+                # DeepSeek thinking mode doesn't support tool_choice, which
+                # ToolStrategy internally requires. Disable thinking so structured
+                # output works via ToolStrategy.
+                if "deepseek" in orchestrator_model_identifier.lower():
+                    model = ModelFactory.create_model(
+                        provider=orchestrator_provider,
+                        model_name=orchestrator_model_name,
+                        extra_body={"thinking": {"type": "disabled"}},
+                    )
+                    deep_agent_kwargs["model"] = model
                 deep_agent_kwargs["response_format"] = orchestrator_response_format
             if orchestrator_state_schema is not None:
                 deep_agent_kwargs["state_schema"] = orchestrator_state_schema
