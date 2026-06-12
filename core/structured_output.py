@@ -19,8 +19,37 @@ Usage:
 from typing import Any, Optional
 
 import structlog
+from langchain.agents.middleware import AgentMiddleware
 
 logger = structlog.get_logger(__name__)
+
+
+class StructuredOutputMappingMiddleware(AgentMiddleware[Any, Any, Any]):
+    """Spreads structured_response fields into typed state fields after model execution.
+
+    deepagents/langchain stores structured output as a single opaque value in
+    state["structured_response"]. Individual fields (e.g. approved, feedback) are
+    never spread into typed state fields automatically. This middleware bridges that
+    gap so edge routers can read e.g. state.get("approved", False).
+
+    Works with both ToolStrategy (tool-call-based) and ProviderStrategy (JSON-mode)
+    response formats. The after_model hook returns a dict that is auto-merged into
+    the LangGraph state via reducers.
+    """
+
+    def after_model(
+        self,
+        state: dict[str, Any],
+        runtime: Any,
+    ) -> dict[str, Any] | None:
+        sr = state.get("structured_response")
+        if not sr or not isinstance(sr, dict):
+            return None
+        logger.debug(
+            "structured_output_mapping_spread",
+            fields=list(sr.keys()),
+        )
+        return dict(sr)
 
 
 def build_tool_strategy(response_format: Any) -> Any:

@@ -56,7 +56,7 @@ def is_custom_topology(definition: Dict[str, Any]) -> bool:
     if definition.get("topology") == "custom":
         return True
     edges = definition.get("edges", [])
-    return any("condition" in edge for edge in edges)
+    return any("condition" in edge or "conditions" in edge for edge in edges)
 
 
 # ------------------------------------------------------------------ #
@@ -102,13 +102,24 @@ def build_state_schema(definition: Dict[str, Any]) -> type:
 # ------------------------------------------------------------------ #
 
 
-def build_node_middleware(node_config: Dict[str, Any]) -> list[Any]:
-    """Reconstruct the essential deepagents middleware stack for a single node."""
+def build_node_middleware(
+    node_config: Dict[str, Any],
+    response_format: Any = None,
+) -> list[Any]:
+    """Reconstruct the essential deepagents middleware stack for a single node.
+
+    When the node has a response_format, appends StructuredOutputMappingMiddleware
+    so structured output fields (e.g. approved, feedback) are spread into typed
+    state fields accessible to edge routers.
+    """
     middleware: list[Any] = [
         TodoListMiddleware(),
         FilesystemMiddleware(),
         PatchToolCallsMiddleware(),
     ]
+    if response_format:
+        from core.structured_output import StructuredOutputMappingMiddleware  # noqa: PLC0415
+        middleware.append(StructuredOutputMappingMiddleware())
     return middleware
 
 
@@ -135,8 +146,8 @@ def compile_node(
         else:
             logger.warning("node_tool_not_found", node=node.get("id", "unknown"), tool_name=name)
 
-    middleware = build_node_middleware(config)
     response_format = config.get("response_format")
+    middleware = build_node_middleware(config, response_format)
 
     kwargs: dict[str, Any] = {
         "model": model,
@@ -185,6 +196,47 @@ def create_edge_router(edge_def: Dict[str, Any]) -> Any:
     return router
 
 
+def create_combined_edge_router(
+    conditions: list[tuple[str, str, bool]],
+    default_target: str,
+) -> Any:
+    """Return a LangGraph router that evaluates conditions in order.
+
+    Each tuple is (condition_expression, target_node, should_increment).
+    The first condition that evaluates to True wins:
+    - If should_increment is True, routes through __increment_budget_{target}__
+    - Otherwise routes to target directly
+
+    If no condition matches, routes to default_target.
+
+    Supports both:
+    - New multi-condition format: conditions array from definition JSON
+    - Legacy single-condition format: unified into a list of one
+    """
+    def router(state: dict[str, Any]) -> str:
+        for condition_str, target, should_increment in conditions:
+            try:
+                result: Any = eval(
+                    condition_str,
+                    {"__builtins__": {}},
+                    {"state": state},
+                )
+                if result:
+                    if should_increment:
+                        return f"__increment_budget_{target}__"
+                    return target
+            except Exception as e:
+                logger.error(
+                    "edge_condition_evaluation_failed",
+                    condition=condition_str,
+                    error=str(e),
+                )
+                continue
+        return default_target
+
+    return router
+
+
 # ------------------------------------------------------------------ #
 #  Graph assembly                                                     #
 # ------------------------------------------------------------------ #
@@ -202,15 +254,22 @@ def build_custom_state_graph(
 
     graph = StateGraph(state_schema)  # type: ignore  # dynamic subclass of DeepAgentState satisfies StateLike
 
-    # 1. Add per-target budget increment nodes for conditional edges
+    # 1. Collect per-target increment requirements and add budget nodes
     #    (created before definition nodes to guarantee they exist at compile time)
     added_budget_nodes: set[str] = set()
+    increment_targets: set[str] = set()
+
     for edge in edges:
-        if "condition" not in edge:
-            continue
-        if "retry_count" not in edge.get("condition", ""):
-            continue
-        target = edge.get("target") or edge.get("to")
+        if "conditions" in edge:
+            for c in edge["conditions"]:
+                needs_inc = c.get("increment", False) or "retry_count" in c.get("condition", "")
+                if needs_inc:
+                    increment_targets.add(c["target"])
+        elif "condition" in edge:
+            if "retry_count" in edge.get("condition", ""):
+                increment_targets.add(edge.get("target") or edge.get("to"))
+
+    for target in increment_targets:
         budget_node_name = f"__increment_budget_{target}__"
         if budget_node_name in added_budget_nodes:
             continue
@@ -238,23 +297,64 @@ def build_custom_state_graph(
     first_id = nodes[0].get("id") or nodes[0].get("name")
     graph.set_entry_point(first_id)
 
-    # 4. Add edges
+    # 4. Group conditional edges by source and add edges
+    #    (LangGraph allows only one add_conditional_edges per source, so all
+    #     conditions from the same source are combined into a single router)
+
+    conditional_groups: dict[str, tuple[list[tuple[str, str, bool]], str]] = {}
+    unconditional_edges: list[tuple[str, str]] = []
+
     for edge in edges:
         source = edge.get("source") or edge.get("from")
 
-        if "condition" in edge:
-            router = create_edge_router(edge)
-            graph.add_conditional_edges(source, router)
-            logger.info(
-                "custom_graph_conditional_edge",
-                source=source,
-                condition=edge.get("condition"),
-                alt_target=edge.get("alt_target"),
-            )
+        if "conditions" in edge:
+            entries: list[tuple[str, str, bool]] = []
+            for c in edge["conditions"]:
+                cond_str = c["condition"]
+                target = c["target"]
+                inc = c.get("increment", False) or "retry_count" in cond_str
+                entries.append((cond_str, target, inc))
+            default_target = edge.get("default_target", END)
+            if default_target == "__end__":
+                default_target = END
+
+            existing = conditional_groups.get(source)
+            if existing is not None:
+                existing[0].extend(entries)
+            else:
+                conditional_groups[source] = (entries, default_target)
+
+        elif "condition" in edge:
+            target = edge.get("target") or edge.get("to")
+            alt_target = edge.get("alt_target", END)
+            if alt_target == "__end__":
+                alt_target = END
+            condition = edge["condition"]
+            inc = "retry_count" in condition
+            entries = [(condition, target, inc)]
+
+            existing = conditional_groups.get(source)
+            if existing is not None:
+                existing[0].extend(entries)
+            else:
+                conditional_groups[source] = (entries, alt_target)
+
         else:
             target = edge.get("target") or edge.get("to")
-            graph.add_edge(source, target)
-            logger.info("custom_graph_edge", source=source, target=target)
+            unconditional_edges.append((source, target))
+
+    for source, (entries, default_target) in conditional_groups.items():
+        router = create_combined_edge_router(entries, default_target)
+        graph.add_conditional_edges(source, router)
+        logger.info(
+            "custom_graph_conditional_edge_grouped",
+            source=source,
+            condition_count=len(entries),
+        )
+
+    for source, target in unconditional_edges:
+        graph.add_edge(source, target)
+        logger.info("custom_graph_edge", source=source, target=target)
 
     logger.info(
         "custom_graph_assembled",
