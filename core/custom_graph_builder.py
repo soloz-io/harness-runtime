@@ -279,6 +279,7 @@ def _add_isolated_agent(
     A prep node (__prep_{node_id}) is added before each agent to reset
     messages to the initial input, preventing message bleed-through across
     nodes while preserving the sub-graph event propagation.
+
     """
     prep_node_id = f"__prep_{node_id}__"
 
@@ -355,7 +356,7 @@ def build_custom_state_graph(
         added_budget_nodes.add(budget_node_name)
         logger.info("custom_graph_budget_node_added", name=budget_node_name, target=target)
 
-    # 3. Add all definition nodes as sub-graph nodes with prep isolators
+    # 2. Add all definition nodes as sub-graph nodes with prep isolators
     for node in nodes:
         node_id = node.get("id") or node.get("name")
         if not node_id:
@@ -363,7 +364,7 @@ def build_custom_state_graph(
         runnable = compile_node(node, available_tools, state_schema, checkpointer)
         _add_isolated_agent(graph, node_id, runnable, node)
 
-    # 4. Add init node and set entry point
+    # 3. Add init node and set entry point
     init_id = "__init_messages__"
     graph.add_node(init_id, _capture_initial)
     graph.set_entry_point(init_id)
@@ -371,7 +372,10 @@ def build_custom_state_graph(
     first_id = nodes[0].get("id") or nodes[0].get("name")
     graph.add_edge(init_id, f"__prep_{first_id}__")
 
-    # 5. Group conditional edges by source and add edges
+    # Collect all agent node IDs for edge routing
+    agent_node_ids = {node.get("id") or node.get("name") for node in nodes}
+
+    # 4. Group conditional edges by source and add edges
     #    (LangGraph allows only one add_conditional_edges per source, so all
     #     conditions from the same source are combined into a single router)
 

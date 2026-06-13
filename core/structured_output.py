@@ -7,22 +7,15 @@ output.
 
 NOTE: Inter-node communication is artifact-based (filesystem via
 read_file/write_file), not message-history-based. Message contexts are
-isolated per node in the custom DAG (see custom_graph_builder.py
-make_isolated_agent_node). This avoids the need for reasoning_content
-serialization monkey-patches.
+isolated per node in the custom DAG. DeepSeek thinking mode is disabled
+for structured output when needed (see resolve_structured_output_model).
 """
 
-from collections.abc import Awaitable, Callable
 from typing import Any, Optional
 
 import structlog
 from langchain.agents.middleware import AgentMiddleware
-from langchain.agents.middleware.types import (
-    ExtendedModelResponse,
-    ModelRequest,
-    ModelResponse,
-)
-from langchain_core.messages import AIMessage
+
 
 logger = structlog.get_logger(__name__)
 
@@ -40,21 +33,6 @@ class StructuredOutputMappingMiddleware(AgentMiddleware[Any, Any, Any]):
     the LangGraph state via reducers.
     """
 
-    def wrap_model_call(
-        self,
-        request: ModelRequest[Any],
-        handler: Callable[[ModelRequest[Any]], ModelResponse[Any]],
-    ) -> ModelResponse[Any] | AIMessage | ExtendedModelResponse[Any]:
-        """Pass-through — no request modification needed."""
-        return handler(request)
-
-    async def awrap_model_call(
-        self,
-        request: ModelRequest[Any],
-        handler: Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]],
-    ) -> ModelResponse[Any] | AIMessage | ExtendedModelResponse[Any]:
-        """Async pass-through — no request modification needed."""
-        return await handler(request)
 
     def after_model(
         self,

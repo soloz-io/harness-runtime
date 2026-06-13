@@ -1,6 +1,6 @@
 [project]
 name = "harness-runtime"
-version = "0.1.2"
+version = "0.1.5"
 description = "LangGraph Agent Execution Engine — stdio subprocess pattern"
 authors = [
     {name = "Bizmatters Team"}
@@ -30,6 +30,7 @@ dev = [
     "black>=24.1.1",
     "ruff>=0.1.13",
     "mypy>=1.8.0",
+    "ty>=0.0.46",
 ]
 
 [project.scripts]

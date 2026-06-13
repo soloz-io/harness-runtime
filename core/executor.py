@@ -97,14 +97,17 @@ class ExecutionManager:
 
         config: RunnableConfig = {"configurable": {"thread_id": session_id}}
 
-        try:
-            tools = _compute_tools(agent_definition) if agent_definition else []
-            self.publisher.publish_system_init(
-                session_id=session_id,
-                model=model_name,
-                tools=tools,
-            )
+        tools = _compute_tools(agent_definition) if agent_definition else []
+        self.publisher.publish_system_init(
+            session_id=session_id,
+            model=model_name,
+            tools=tools,
+        )
 
+        completed_normally = False
+        error_message: Optional[str] = None
+
+        try:
             for event in graph.stream(
                 input_payload, config, stream_mode=["values", "messages"]
             ):
@@ -185,9 +188,16 @@ class ExecutionManager:
                         if state_files:
                             last_files.update(state_files)
 
-            final_text = _extract_final_text(final_messages)
-            duration_ms = int((time.time() - start_time) * 1000)
+            completed_normally = True
 
+        except Exception as e:
+            error_message = str(e)
+            logger.error("graph_execution_failed", error=error_message)
+
+        duration_ms = int((time.time() - start_time) * 1000)
+
+        if completed_normally:
+            final_text = _extract_final_text(final_messages)
             self.publisher.publish_result(
                 session_id=session_id,
                 subtype="success",
@@ -197,20 +207,18 @@ class ExecutionManager:
                 structured_response=last_structured_response,
                 files=last_files if last_files else None,
             )
-
             return final_text
-
-        except Exception as e:
-            duration_ms = int((time.time() - start_time) * 1000)
-            logger.error("graph_execution_failed", error=str(e))
+        else:
             self.publisher.publish_result(
                 session_id=session_id,
                 subtype="error_during_execution",
                 duration_ms=duration_ms,
                 is_error=True,
-                result=str(e),
+                result=error_message or "Unknown execution error",
             )
-            raise ExecutionError(f"Graph execution failed: {e}") from e
+            raise ExecutionError(f"Graph execution failed: {error_message or 'Unknown error'}") from (
+                None if not error_message else Exception(error_message)
+            )
 
     def health_check(self) -> bool:
         try:
