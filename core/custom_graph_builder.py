@@ -136,7 +136,24 @@ def compile_node(
     model_name = model_cfg.get("model_name") or model_cfg.get("model")
 
     from core.model_factory import ModelFactory  # noqa: PLC0415
-    model = ModelFactory.create_model(provider=provider, model_name=model_name)
+    from core.structured_output import needs_thinking_disabled, resolve_structured_output_model  # noqa: PLC0415
+
+    response_format = config.get("response_format")
+    model_identifier = ModelFactory.resolve_model_identifier(provider, model_name)
+
+    if needs_thinking_disabled(model_identifier, response_format):
+        model = resolve_structured_output_model(provider, model_name, response_format)
+    elif "deepseek" in model_identifier.lower():
+        # Disable DeepSeek thinking mode for ALL nodes, not just those with
+        # response_format, to avoid reasoning_content conflicts when
+        # conversation history crosses agent boundaries.
+        model = ModelFactory.create_model(
+            provider=provider,
+            model_name=model_name,
+            extra_body={"thinking": {"type": "disabled"}},
+        )
+    else:
+        model = ModelFactory.create_model(provider=provider, model_name=model_name)
 
     tool_names = config.get("tools", [])
     tools = []
