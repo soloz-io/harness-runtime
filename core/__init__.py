@@ -1,26 +1,8 @@
 """Core business logic for graph building and execution.
 
-This module provides the main entry point for the agent executor service.
-The implementation follows a flat, modular structure:
-
-Flat Structure:
-    - builder.py: Main GraphBuilder class (entry point)
-    - model_identifier.py: Model identifier creation
-    - subagent_builder.py: Subagent compilation logic
-    - tool_loader.py: Tool loading logic
-
-Usage:
-    from core import GraphBuilder
-
-    builder = GraphBuilder()
-    agent = builder.build_from_definition(definition)
-
-Or use the modular functions directly:
-    from core import (
-        load_tools_from_definition,
-        create_model_identifier,
-        build_subagent
-    )
+Inter-node communication is artifact-based (filesystem read_file/write_file),
+not message-history-based. Message contexts are isolated per node in the
+custom DAG -- see custom_graph_builder.py make_isolated_agent_node.
 """
 
 # Main API

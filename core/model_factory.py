@@ -28,6 +28,18 @@ def _detect_provider(model_name: str) -> str:
     return result
 
 
+def _resolve_openai_base_url(model_name: str, extra_kwargs: dict[str, Any]) -> str | None:
+    """Resolve OpenAI-compatible base URL from env or model prefix."""
+    env_base = os.environ.get("OPENAI_BASE_URL")
+    if env_base:
+        return env_base
+    if "base_url" in extra_kwargs or "base_url" in os.environ:
+        return None  # already explicitly set
+    if model_name.startswith("deepseek"):
+        return "https://api.deepseek.com"
+    return None
+
+
 def _create_model_for_provider(provider: str, model_name: str, api_key: str, **extra_kwargs: Any) -> Any:
     """Create the appropriate LLM model based on provider and model name."""
     kwargs: dict[str, Any] = {"model": model_name, "api_key": api_key, **extra_kwargs}
@@ -36,6 +48,9 @@ def _create_model_for_provider(provider: str, model_name: str, api_key: str, **e
         from langchain_anthropic import ChatAnthropic
         return ChatAnthropic(**kwargs)
     elif provider == "openai":
+        base_url = _resolve_openai_base_url(model_name, extra_kwargs)
+        if base_url:
+            kwargs["base_url"] = base_url
         from langchain_openai import ChatOpenAI
         return ChatOpenAI(**kwargs)
     else:
@@ -90,9 +105,15 @@ class ModelFactory:
         # may be incorrect for cross-provider models like deepseek via OpenAI API)
         prov = os.environ.get("LLM_PROVIDER") or _detect_provider(model)
 
-        api_key = (os.environ.get("OPENAI_API_KEY")
-                   or os.environ.get("DEEPSEEK_API_KEY")
-                   or os.environ.get("ANTHROPIC_API_KEY"))
+        if model.startswith("deepseek"):
+            api_key = (os.environ.get("DEEPSEEK_API_KEY")
+                       or os.environ.get("OPENAI_API_KEY"))
+            if "extra_body" not in extra_kwargs:
+                extra_kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+        else:
+            api_key = (os.environ.get("OPENAI_API_KEY")
+                       or os.environ.get("DEEPSEEK_API_KEY")
+                       or os.environ.get("ANTHROPIC_API_KEY"))
         if not api_key:
             raise ValueError(
                 "No API key found. Set OPENAI_API_KEY, DEEPSEEK_API_KEY, "
