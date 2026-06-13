@@ -134,6 +134,7 @@ class ResultFrame:
     usage: dict[str, Any] = field(default_factory=dict)
     result: Optional[str] = None
     structured_response: Optional[Any] = None
+    files: Optional[dict[str, Any]] = None
 
 
 @dataclass

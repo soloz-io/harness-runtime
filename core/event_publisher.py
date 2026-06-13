@@ -41,7 +41,8 @@ class EventPublisher(ABC):
     def publish_result(self, *, session_id: str, subtype: str = "success",
                        duration_ms: int = 0, is_error: bool = False,
                        num_turns: int = 1, result: Optional[str] = None,
-                       structured_response: Optional[dict[str, Any]] = None) -> None:
+                       structured_response: Optional[dict[str, Any]] = None,
+                       files: Optional[dict[str, Any]] = None) -> None:
         ...
 
     @abstractmethod
@@ -91,7 +92,8 @@ class StdioPublisher(EventPublisher):
     def publish_result(self, *, session_id: str, subtype: str = "success",
                        duration_ms: int = 0, is_error: bool = False,
                        num_turns: int = 1, result: Optional[str] = None,
-                       structured_response: Optional[dict[str, Any]] = None) -> None:
+                       structured_response: Optional[dict[str, Any]] = None,
+                       files: Optional[dict[str, Any]] = None) -> None:
         self._write(ResultFrame(
             subtype=subtype,
             session_id=session_id,
@@ -101,6 +103,7 @@ class StdioPublisher(EventPublisher):
             num_turns=num_turns,
             result=result,
             structured_response=structured_response,
+            files=files,
         ))
 
     def publish_control_response(self, *, request_id: str,

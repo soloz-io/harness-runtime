@@ -54,6 +54,7 @@ class ExecutionManager:
         streamed_text = ""
         final_messages = []
         last_structured_response = None
+        last_files: dict[str, Any] = {}
 
         config: RunnableConfig = {"configurable": {"thread_id": session_id}}
 
@@ -145,6 +146,9 @@ class ExecutionManager:
                             final_messages = msgs
                         if "structured_response" in data:
                             last_structured_response = data["structured_response"]
+                        state_files = data.get("files")
+                        if state_files:
+                            last_files.update(state_files)
 
             remaining = streamed_text
             streamed_text = ""
@@ -165,6 +169,7 @@ class ExecutionManager:
                 num_turns=num_turns,
                 result=final_text,
                 structured_response=last_structured_response,
+                files=last_files if last_files else None,
             )
 
             return final_text
