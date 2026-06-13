@@ -90,24 +90,22 @@ class ExecutionManager:
         num_turns: int = 1,
     ) -> str:
         start_time = time.time()
+        streamed_text = ""
         final_messages: list[Any] = []
-        prev_msg_count = 0
         last_structured_response = None
         last_files: dict[str, Any] = {}
+        published_message_ids: set[str] = set()
 
         config: RunnableConfig = {"configurable": {"thread_id": session_id}}
 
-        tools = _compute_tools(agent_definition) if agent_definition else []
-        self.publisher.publish_system_init(
-            session_id=session_id,
-            model=model_name,
-            tools=tools,
-        )
-
-        completed_normally = False
-        error_message: Optional[str] = None
-
         try:
+            tools = _compute_tools(agent_definition) if agent_definition else []
+            self.publisher.publish_system_init(
+                session_id=session_id,
+                model=model_name,
+                tools=tools,
+            )
+
             for event in graph.stream(
                 input_payload, config, stream_mode=["values", "messages"]
             ):
@@ -121,6 +119,7 @@ class ExecutionManager:
                     if hasattr(msg_chunk, "content") and isinstance(msg_chunk.content, str):
                         delta = msg_chunk.content
                         if delta:
+                            streamed_text += delta
                             self.publisher.publish_stream_event_text(
                                 session_id=session_id,
                                 text=delta,
@@ -128,59 +127,53 @@ class ExecutionManager:
 
                 elif mode == "values":
                     if isinstance(data, dict):
-                        msgs = data.get("messages", [])
-
-                        # Detect and emit frames for new messages since last snapshot
-                        new_msgs = msgs[prev_msg_count:]
-                        for msg in new_msgs:
-                            msg_type = getattr(msg, "type", "")
-                            if msg_type == "ai":
-                                content_blocks: list[dict[str, Any]] = []
-                                text = getattr(msg, "content", "") or ""
-                                if text:
-                                    content_blocks.append({
-                                        "type": "text",
-                                        "text": text,
-                                    })
-                                tool_calls = _extract_tool_calls(msg)
-                                for tc in tool_calls:
-                                    content_blocks.append({
-                                        "type": "tool_use",
-                                        "id": tc.get("id", f"call_{uuid.uuid4().hex[:12]}"),
-                                        "name": tc.get("name", "unknown"),
-                                        "input": tc.get("args", tc.get("input", {})),
-                                    })
-                                if content_blocks:
-                                    self.publisher.publish_assistant(
-                                        session_id=session_id,
-                                        model=model_name,
-                                        content=content_blocks,
-                                    )
-
-                            elif msg_type == "tool":
-                                tool_call_id = getattr(
-                                    msg, "tool_call_id", f"call_{uuid.uuid4().hex[:12]}"
-                                )
-                                tool_content = _serialize_content(
-                                    getattr(msg, "content", "")
-                                )
-                                is_error = getattr(msg, "is_error", False) or (
-                                    getattr(msg, "additional_kwargs", {})
-                                    .get("is_error", False)
-                                )
-                                self.publisher.publish_user_echo(
-                                    session_id=session_id,
-                                    content=[{
-                                        "type": "tool_result",
-                                        "tool_use_id": tool_call_id,
-                                        "content": tool_content,
-                                        "is_error": is_error,
-                                    }],
-                                )
-
-                        prev_msg_count = len(msgs)
-
+                        msgs: list[Any] = data.get("messages", [])
                         if len(msgs) > len(final_messages):
+                            for msg in msgs[len(final_messages):]:
+                                msg_id = getattr(msg, "id", None) or str(id(msg))
+                                if msg_id not in published_message_ids:
+                                    published_message_ids.add(msg_id)
+                                    msg_type = getattr(msg, "type", "")
+                                    if msg_type == "ai":
+                                        blocks: list[dict[str, Any]] = []
+                                        text = getattr(msg, "content", "") or ""
+                                        if isinstance(text, str) and text:
+                                            blocks.append({"type": "text", "text": text})
+                                        elif isinstance(text, list):
+                                            for b in text:
+                                                if isinstance(b, dict):
+                                                    blocks.append(b)
+                                        for tc in _extract_tool_calls(msg):
+                                            blocks.append({
+                                                "type": "tool_use",
+                                                "id": tc.get("id", f"call_{uuid.uuid4().hex[:12]}"),
+                                                "name": tc.get("name", "unknown"),
+                                                "input": tc.get("args", tc.get("input", {})),
+                                            })
+                                        if blocks:
+                                            self.publisher.publish_assistant(
+                                                session_id=session_id,
+                                                model=model_name,
+                                                content=blocks,
+                                            )
+                                    elif msg_type == "tool":
+                                        tool_call_id = getattr(msg, "tool_call_id", f"call_{uuid.uuid4().hex[:12]}")
+                                        tool_content = _serialize_content(
+                                            getattr(msg, "content", "")
+                                        )
+                                        is_error = getattr(msg, "is_error", False) or (
+                                            getattr(msg, "additional_kwargs", {})
+                                            .get("is_error", False)
+                                        )
+                                        self.publisher.publish_user_echo(
+                                            session_id=session_id,
+                                            content=[{
+                                                "type": "tool_result",
+                                                "tool_use_id": tool_call_id,
+                                                "content": tool_content,
+                                                "is_error": is_error,
+                                            }],
+                                        )
                             final_messages = msgs
                         if "structured_response" in data:
                             last_structured_response = data["structured_response"]
@@ -188,16 +181,18 @@ class ExecutionManager:
                         if state_files:
                             last_files.update(state_files)
 
-            completed_normally = True
+            remaining = streamed_text
+            streamed_text = ""
+            if remaining:
+                self.publisher.publish_assistant(
+                    session_id=session_id,
+                    model=model_name,
+                    content=[{"type": "text", "text": remaining}],
+                )
 
-        except Exception as e:
-            error_message = str(e)
-            logger.error("graph_execution_failed", error=error_message)
+            final_text = _extract_final_text(final_messages) or remaining
+            duration_ms = int((time.time() - start_time) * 1000)
 
-        duration_ms = int((time.time() - start_time) * 1000)
-
-        if completed_normally:
-            final_text = _extract_final_text(final_messages)
             self.publisher.publish_result(
                 session_id=session_id,
                 subtype="success",
@@ -207,18 +202,20 @@ class ExecutionManager:
                 structured_response=last_structured_response,
                 files=last_files if last_files else None,
             )
+
             return final_text
-        else:
+
+        except Exception as e:
+            duration_ms = int((time.time() - start_time) * 1000)
+            logger.error("graph_execution_failed", error=str(e))
             self.publisher.publish_result(
                 session_id=session_id,
                 subtype="error_during_execution",
                 duration_ms=duration_ms,
                 is_error=True,
-                result=error_message or "Unknown execution error",
+                result=str(e),
             )
-            raise ExecutionError(f"Graph execution failed: {error_message or 'Unknown error'}") from (
-                None if not error_message else Exception(error_message)
-            )
+            raise ExecutionError(f"Graph execution failed: {e}") from e
 
     def health_check(self) -> bool:
         try:

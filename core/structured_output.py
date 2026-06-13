@@ -3,65 +3,32 @@ Structured Input/Output support for agent definitions.
 
 Handles conversion of JSON Schema response_format definitions into
 deepagents ToolStrategy objects and model resolution for structured
-output.
+output (e.g., disabling DeepSeek thinking mode which conflicts with
+tool_choice required by ToolStrategy).
 
-NOTE: Inter-node communication is artifact-based (filesystem via
-read_file/write_file), not message-history-based. Message contexts are
-isolated per node in the custom DAG. DeepSeek thinking mode is disabled
-for structured output when needed (see resolve_structured_output_model).
+Usage:
+    from core.structured_output import build_tool_strategy, resolve_structured_output_model
+
+    strategy = build_tool_strategy(response_format_config)
+    if strategy:
+        model = resolve_structured_output_model(provider, model_name)
+        agent_kwargs["response_format"] = strategy
+        agent_kwargs["model"] = model
 """
 
+from collections.abc import Awaitable, Callable
 from typing import Any, Optional
 
 import structlog
 from langchain.agents.middleware import AgentMiddleware
-from pydantic import BaseModel
-
+from langchain.agents.middleware.types import (
+    ExtendedModelResponse,
+    ModelRequest,
+    ModelResponse,
+)
+from langchain_core.messages import AIMessage
 
 logger = structlog.get_logger(__name__)
-
-
-def _dict_to_pydantic_model(schema: dict[str, Any]) -> type[BaseModel]:
-    """Convert a JSON schema dict to a dynamically-created Pydantic model.
-
-    LangChain's _parse_with_schema bypasses validation for raw JSON schema
-    dicts (schema_kind == "json_schema" returns data as-is). By using a
-    Pydantic model, validation errors on empty/malformed tool call args
-    trigger LangChain's built-in handle_errors retry mechanism, causing
-    the model to retry with correct arguments.
-
-    Args:
-        schema: A JSON schema dict with properties and optional required fields.
-
-    Returns:
-        A dynamically-created Pydantic BaseModel subclass.
-    """
-    from pydantic import create_model
-
-    title = schema.get("title", "ResponseFormat")
-    required = set(schema.get("required", []))
-    fields: dict[str, tuple[type, Any]] = {}
-
-    for prop_name, prop_schema in schema.get("properties", {}).items():
-        prop_type = prop_schema.get("type", "string")
-
-        if prop_type == "boolean":
-            field_type = bool
-        elif prop_type == "integer":
-            field_type = int
-        elif prop_type == "number":
-            field_type = float
-        elif prop_type == "string":
-            field_type = str
-        else:
-            field_type = Optional[Any]
-
-        if prop_name in required:
-            fields[prop_name] = (field_type, ...)
-        else:
-            fields[prop_name] = (Optional[field_type], None)
-
-    return create_model(title, **fields)
 
 
 class StructuredOutputMappingMiddleware(AgentMiddleware[Any, Any, Any]):
@@ -75,8 +42,60 @@ class StructuredOutputMappingMiddleware(AgentMiddleware[Any, Any, Any]):
     Works with both ToolStrategy (tool-call-based) and ProviderStrategy (JSON-mode)
     response formats. The after_model hook returns a dict that is auto-merged into
     the LangGraph state via reducers.
+
+    Also strips reasoning_content from incoming messages before the API call
+    (for DeepSeek models where thinking mode is disabled but previous agents
+    added reasoning_content to the shared state.messages).
     """
 
+    def _strip_reasoning_content(
+        self, messages: list[Any]
+    ) -> list[Any]:
+        """Deep-copy messages and remove ``reasoning_content`` from ``additional_kwargs``."""
+        import copy
+
+        stripped = copy.deepcopy(messages)
+        for msg in stripped:
+            if hasattr(msg, "additional_kwargs") and isinstance(msg.additional_kwargs, dict):
+                msg.additional_kwargs.pop("reasoning_content", None)
+        return stripped
+
+    def wrap_model_call(
+        self,
+        request: ModelRequest[Any],
+        handler: Callable[[ModelRequest[Any]], ModelResponse[Any]],
+    ) -> ModelResponse[Any] | AIMessage | ExtendedModelResponse[Any]:
+        """Strip reasoning_content from incoming messages before forwarding
+        to a thinking-disabled model, preventing DeepSeek API rejection."""
+        needs_strip = any(
+            hasattr(m, "additional_kwargs")
+            and isinstance(m.additional_kwargs, dict)
+            and "reasoning_content" in m.additional_kwargs
+            for m in request.messages
+        )
+        if needs_strip:
+            request = request.override(
+                messages=self._strip_reasoning_content(request.messages)
+            )
+        return handler(request)
+
+    async def awrap_model_call(
+        self,
+        request: ModelRequest[Any],
+        handler: Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]],
+    ) -> ModelResponse[Any] | AIMessage | ExtendedModelResponse[Any]:
+        """Async variant of wrap_model_call."""
+        needs_strip = any(
+            hasattr(m, "additional_kwargs")
+            and isinstance(m.additional_kwargs, dict)
+            and "reasoning_content" in m.additional_kwargs
+            for m in request.messages
+        )
+        if needs_strip:
+            request = request.override(
+                messages=self._strip_reasoning_content(request.messages)
+            )
+        return await handler(request)
 
     def after_model(
         self,
@@ -84,33 +103,17 @@ class StructuredOutputMappingMiddleware(AgentMiddleware[Any, Any, Any]):
         runtime: Any,
     ) -> dict[str, Any] | None:
         sr = state.get("structured_response")
-
-        if isinstance(sr, dict):
-            if not sr:
-                return None
-            logger.debug(
-                "structured_output_mapping_spread",
-                fields=list(sr.keys()),
-            )
-            return dict(sr)
-
-        if hasattr(sr, "model_dump"):
-            dumped = sr.model_dump()
-            logger.debug(
-                "structured_output_mapping_spread_from_pydantic",
-                fields=list(dumped.keys()),
-            )
-            return dumped
-
-        return None
+        if not sr or not isinstance(sr, dict):
+            return None
+        logger.debug(
+            "structured_output_mapping_spread",
+            fields=list(sr.keys()),
+        )
+        return dict(sr)
 
 
 def build_tool_strategy(response_format: Any) -> Any:
     """Wrap a JSON schema dict into a ToolStrategy for create_deep_agent.
-
-    Converts raw JSON schema dicts to Pydantic models first to ensure
-    validation catches empty/malformed tool call args, triggering
-    LangChain's built-in handle_errors retry mechanism.
 
     Args:
         response_format: A dict with type/properties/required fields
@@ -125,11 +128,7 @@ def build_tool_strategy(response_format: Any) -> Any:
     try:
         from langchain.agents.structured_output import ToolStrategy
 
-        schema = response_format
-        if "properties" in schema:
-            schema = _dict_to_pydantic_model(schema)
-
-        strategy = ToolStrategy(schema=schema)
+        strategy = ToolStrategy(schema=response_format)
         logger.info(
             "structured_output_tool_strategy_created",
             properties=list(response_format.get("properties", {}).keys()),

@@ -24,7 +24,7 @@ Key architectural decisions:
   a trusted escape hatch (see ADR-005).
 """
 
-from typing import Annotated, Any, Dict, List
+from typing import Any, Dict, List
 
 import structlog
 from langchain_core.runnables import Runnable
@@ -33,7 +33,7 @@ from langgraph.graph import END, StateGraph
 # Import deepagents components for individual agent node construction
 try:
     from deepagents.graph import DeepAgentState
-    from deepagents.middleware.filesystem import FilesystemMiddleware, FilesystemPermission
+    from deepagents.middleware.filesystem import FilesystemMiddleware
     from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
     from langchain.agents import create_agent
     from langchain.agents.middleware import TodoListMiddleware
@@ -64,16 +64,6 @@ def is_custom_topology(definition: Dict[str, Any]) -> bool:
 # ------------------------------------------------------------------ #
 
 
-def _merge_dict(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]:
-    """Reducer: merge dict b into dict a (b wins on key conflicts)."""
-    return {**a, **b}
-
-
-def _extend_list(a: List[Any], b: List[Any]) -> List[Any]:
-    """Reducer: concatenate list b to list a."""
-    return a + b
-
-
 def build_state_schema(definition: Dict[str, Any]) -> type:
     """Create a DeepAgentState subclass with additional fields from definition['state_schema']."""
     schema_config = definition.get("state_schema", {})
@@ -92,17 +82,11 @@ def build_state_schema(definition: Dict[str, Any]) -> type:
         elif field_type == "float":
             annotations[field_name] = float
         elif field_type == "dict":
-            annotations[field_name] = Annotated[Dict[str, Any], _merge_dict]
+            annotations[field_name] = Dict[str, Any]
         elif field_type == "list":
-            annotations[field_name] = Annotated[List[Any], _extend_list]
+            annotations[field_name] = List[Any]
         else:
             annotations[field_name] = Any
-
-    # Internal fields for sub-graph message isolation
-    if "__initial_messages" not in annotations:
-        annotations["__initial_messages"] = List[Any]
-    if "__saved_messages" not in annotations:
-        annotations["__saved_messages"] = List[Any]
 
     DynamicState = type(
         "CustomTopologyState",
@@ -127,23 +111,10 @@ def build_node_middleware(
     When the node has a response_format, appends StructuredOutputMappingMiddleware
     so structured output fields (e.g. approved, feedback) are spread into typed
     state fields accessible to edge routers.
-
-    Node-level ``filesystem_permissions`` in config (if present) are forwarded to
-    FilesystemMiddleware as ``_permissions`` — this is how per-agent artifact path
-    constraints are enforced without hardcoding agent names in the runtime.
     """
-    permissions_config: list[dict[str, Any]] = node_config.get("filesystem_permissions", [])
-    permissions: list[FilesystemPermission] = []
-    for p in permissions_config:
-        permissions.append(FilesystemPermission(
-            operations=p["operations"],
-            paths=[p["path"]],
-            mode=p.get("mode", "allow"),
-        ))
-
     middleware: list[Any] = [
         TodoListMiddleware(),
-        FilesystemMiddleware(_permissions=permissions or None),
+        FilesystemMiddleware(),
         PatchToolCallsMiddleware(),
     ]
     if response_format:
@@ -165,15 +136,16 @@ def compile_node(
     model_name = model_cfg.get("model_name") or model_cfg.get("model")
 
     from core.model_factory import ModelFactory  # noqa: PLC0415
+    from core.structured_output import (  # noqa: PLC0415
+        needs_thinking_disabled,
+        resolve_structured_output_model,
+    )
 
     response_format = config.get("response_format")
     model_identifier = ModelFactory.resolve_model_identifier(provider, model_name)
 
-    if "deepseek" in model_identifier.lower():
-        model = ModelFactory.create_model(
-            provider=provider, model_name=model_name,
-            extra_body={"thinking": {"type": "disabled"}},
-        )
+    if needs_thinking_disabled(model_identifier, response_format):
+        model = resolve_structured_output_model(provider, model_name, response_format)
     else:
         model = ModelFactory.create_model(provider=provider, model_name=model_name)
 
@@ -236,20 +208,24 @@ def create_edge_router(edge_def: Dict[str, Any]) -> Any:
 
 
 def create_combined_edge_router(
-    conditions: list[tuple[str, str, str, bool]],
+    conditions: list[tuple[str, str, bool]],
     default_target: str,
 ) -> Any:
     """Return a LangGraph router that evaluates conditions in order.
 
-    Each tuple is (condition_string, target_node, increment_target_node, should_increment).
+    Each tuple is (condition_expression, target_node, should_increment).
     The first condition that evaluates to True wins:
-    - If should_increment is True, routes through increment_target_node
-    - Otherwise routes to target_node directly
+    - If should_increment is True, routes through __increment_budget_{target}__
+    - Otherwise routes to target directly
 
     If no condition matches, routes to default_target.
+
+    Supports both:
+    - New multi-condition format: conditions array from definition JSON
+    - Legacy single-condition format: unified into a list of one
     """
     def router(state: dict[str, Any]) -> str:
-        for condition_str, target, inc_target, should_increment in conditions:
+        for condition_str, target, should_increment in conditions:
             try:
                 result: Any = eval(
                     condition_str,
@@ -258,7 +234,7 @@ def create_combined_edge_router(
                 )
                 if result:
                     if should_increment:
-                        return inc_target
+                        return f"__increment_budget_{target}__"
                     return target
             except Exception as e:
                 logger.error(
@@ -270,46 +246,6 @@ def create_combined_edge_router(
         return default_target
 
     return router
-
-
-# ------------------------------------------------------------------ #
-#  Context isolation wrapper                                          #
-# ------------------------------------------------------------------ #
-
-
-def _add_isolated_agent(
-    graph: StateGraph,
-    node_id: str,
-    runnable: Runnable[Any, Any],
-    node: Dict[str, Any],
-) -> None:
-    """Add an agent as a sub-graph node with message isolation.
-
-    The agent is added as a sub-graph node (CompiledStateGraph, not a function
-    node), which allows streaming events from within the agent to propagate
-    to the parent graph's stream() iteration.
-
-    A prep node (__prep_{node_id}) is added before each agent to reset
-    messages to the initial input, preventing message bleed-through across
-    nodes while preserving the sub-graph event propagation.
-
-    """
-    prep_node_id = f"__prep_{node_id}__"
-
-    def prep_agent(state: dict[str, Any]) -> dict[str, Any]:
-        init_msgs = state.get("__initial_messages", [])
-        return {"messages": list(init_msgs)}
-
-    graph.add_node(prep_node_id, prep_agent)
-    graph.add_node(node_id, runnable)
-    graph.add_edge(prep_node_id, node_id)
-    logger.info(
-        "custom_graph_node_added",
-        node_id=node_id,
-        type=node.get("type"),
-        isolated=True,
-        subgraph=True,
-    )
 
 
 # ------------------------------------------------------------------ #
@@ -328,16 +264,6 @@ def build_custom_state_graph(
     state_schema = build_state_schema(definition)
 
     graph = StateGraph(state_schema)  # type: ignore  # dynamic subclass of DeepAgentState satisfies StateLike
-
-    # Helper: route edges through prep node targets
-    def _prep_target(target: str) -> str:
-        if not target or target == "__end__":
-            return END
-        return f"__prep_{target}__"
-
-    # Helper: capture initial messages for later prep isolation
-    def _capture_initial(state: dict[str, Any]) -> dict[str, Any]:
-        return {"__initial_messages": list(state.get("messages", []))}
 
     # 1. Collect per-target increment requirements and add budget nodes
     #    (created before definition nodes to guarantee they exist at compile time)
@@ -365,47 +291,43 @@ def build_custom_state_graph(
             return increment_budget_node
 
         graph.add_node(budget_node_name, _make_increment_budget())
-        graph.add_edge(budget_node_name, _prep_target(target))
+        graph.add_edge(budget_node_name, target)
         added_budget_nodes.add(budget_node_name)
         logger.info("custom_graph_budget_node_added", name=budget_node_name, target=target)
 
-    # 2. Add all definition nodes as sub-graph nodes with prep isolators
+    # 2. Add all definition nodes
     for node in nodes:
         node_id = node.get("id") or node.get("name")
         if not node_id:
             raise ValueError("Each node must have an 'id' or 'name' field")
         runnable = compile_node(node, available_tools, state_schema, checkpointer)
-        _add_isolated_agent(graph, node_id, runnable, node)
+        graph.add_node(node_id, runnable)
+        logger.info("custom_graph_node_added", node_id=node_id, type=node.get("type"))
 
-    # 3. Add init node and set entry point
-    init_id = "__init_messages__"
-    graph.add_node(init_id, _capture_initial)
-    graph.set_entry_point(init_id)
-
+    # 3. Set entry point
     first_id = nodes[0].get("id") or nodes[0].get("name")
-    graph.add_edge(init_id, f"__prep_{first_id}__")
-
-    # Collect all agent node IDs for edge routing
-    agent_node_ids = {node.get("id") or node.get("name") for node in nodes}
+    graph.set_entry_point(first_id)
 
     # 4. Group conditional edges by source and add edges
     #    (LangGraph allows only one add_conditional_edges per source, so all
     #     conditions from the same source are combined into a single router)
 
-    conditional_groups: dict[str, tuple[list[tuple[str, str, str, bool]], str]] = {}
+    conditional_groups: dict[str, tuple[list[tuple[str, str, bool]], str]] = {}
     unconditional_edges: list[tuple[str, str]] = []
 
     for edge in edges:
         source = edge.get("source") or edge.get("from")
 
         if "conditions" in edge:
-            entries: list[tuple[str, str, str, bool]] = []
+            entries: list[tuple[str, str, bool]] = []
             for c in edge["conditions"]:
                 cond_str = c["condition"]
                 target = c["target"]
                 inc = c.get("increment", False) or "retry_count" in cond_str
-                entries.append((cond_str, _prep_target(target), f"__increment_budget_{target}__", inc))
-            default_target = _prep_target(edge.get("default_target", "__end__"))
+                entries.append((cond_str, target, inc))
+            default_target = edge.get("default_target", END)
+            if default_target == "__end__":
+                default_target = END
 
             existing = conditional_groups.get(source)
             if existing is not None:
@@ -415,10 +337,12 @@ def build_custom_state_graph(
 
         elif "condition" in edge:
             target = edge.get("target") or edge.get("to")
-            alt_target = _prep_target(edge.get("alt_target", "__end__"))
+            alt_target = edge.get("alt_target", END)
+            if alt_target == "__end__":
+                alt_target = END
             condition = edge["condition"]
             inc = "retry_count" in condition
-            entries = [(condition, _prep_target(target), f"__increment_budget_{target}__", inc)]
+            entries = [(condition, target, inc)]
 
             existing = conditional_groups.get(source)
             if existing is not None:
@@ -428,7 +352,7 @@ def build_custom_state_graph(
 
         else:
             target = edge.get("target") or edge.get("to")
-            unconditional_edges.append((source, _prep_target(target)))
+            unconditional_edges.append((source, target))
 
     for source, (entries, default_target) in conditional_groups.items():
         router = create_combined_edge_router(entries, default_target)
