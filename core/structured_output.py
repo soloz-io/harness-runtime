@@ -15,9 +15,53 @@ from typing import Any, Optional
 
 import structlog
 from langchain.agents.middleware import AgentMiddleware
+from pydantic import BaseModel
 
 
 logger = structlog.get_logger(__name__)
+
+
+def _dict_to_pydantic_model(schema: dict[str, Any]) -> type[BaseModel]:
+    """Convert a JSON schema dict to a dynamically-created Pydantic model.
+
+    LangChain's _parse_with_schema bypasses validation for raw JSON schema
+    dicts (schema_kind == "json_schema" returns data as-is). By using a
+    Pydantic model, validation errors on empty/malformed tool call args
+    trigger LangChain's built-in handle_errors retry mechanism, causing
+    the model to retry with correct arguments.
+
+    Args:
+        schema: A JSON schema dict with properties and optional required fields.
+
+    Returns:
+        A dynamically-created Pydantic BaseModel subclass.
+    """
+    from pydantic import create_model
+
+    title = schema.get("title", "ResponseFormat")
+    required = set(schema.get("required", []))
+    fields: dict[str, tuple[type, Any]] = {}
+
+    for prop_name, prop_schema in schema.get("properties", {}).items():
+        prop_type = prop_schema.get("type", "string")
+
+        if prop_type == "boolean":
+            field_type = bool
+        elif prop_type == "integer":
+            field_type = int
+        elif prop_type == "number":
+            field_type = float
+        elif prop_type == "string":
+            field_type = str
+        else:
+            field_type = Optional[Any]
+
+        if prop_name in required:
+            fields[prop_name] = (field_type, ...)
+        else:
+            fields[prop_name] = (Optional[field_type], None)
+
+    return create_model(title, **fields)
 
 
 class StructuredOutputMappingMiddleware(AgentMiddleware[Any, Any, Any]):
@@ -40,17 +84,33 @@ class StructuredOutputMappingMiddleware(AgentMiddleware[Any, Any, Any]):
         runtime: Any,
     ) -> dict[str, Any] | None:
         sr = state.get("structured_response")
-        if not sr or not isinstance(sr, dict):
-            return None
-        logger.debug(
-            "structured_output_mapping_spread",
-            fields=list(sr.keys()),
-        )
-        return dict(sr)
+
+        if isinstance(sr, dict):
+            if not sr:
+                return None
+            logger.debug(
+                "structured_output_mapping_spread",
+                fields=list(sr.keys()),
+            )
+            return dict(sr)
+
+        if hasattr(sr, "model_dump"):
+            dumped = sr.model_dump()
+            logger.debug(
+                "structured_output_mapping_spread_from_pydantic",
+                fields=list(dumped.keys()),
+            )
+            return dumped
+
+        return None
 
 
 def build_tool_strategy(response_format: Any) -> Any:
     """Wrap a JSON schema dict into a ToolStrategy for create_deep_agent.
+
+    Converts raw JSON schema dicts to Pydantic models first to ensure
+    validation catches empty/malformed tool call args, triggering
+    LangChain's built-in handle_errors retry mechanism.
 
     Args:
         response_format: A dict with type/properties/required fields
@@ -65,7 +125,11 @@ def build_tool_strategy(response_format: Any) -> Any:
     try:
         from langchain.agents.structured_output import ToolStrategy
 
-        strategy = ToolStrategy(schema=response_format)
+        schema = response_format
+        if "properties" in schema:
+            schema = _dict_to_pydantic_model(schema)
+
+        strategy = ToolStrategy(schema=schema)
         logger.info(
             "structured_output_tool_strategy_created",
             properties=list(response_format.get("properties", {}).keys()),

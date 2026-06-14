@@ -33,7 +33,7 @@ from langgraph.graph import END, StateGraph
 # Import deepagents components for individual agent node construction
 try:
     from deepagents.graph import DeepAgentState
-    from deepagents.middleware.filesystem import FilesystemMiddleware
+    from deepagents.middleware.filesystem import FilesystemMiddleware, FilesystemPermission
     from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
     from langchain.agents import create_agent
     from langchain.agents.middleware import TodoListMiddleware
@@ -127,10 +127,23 @@ def build_node_middleware(
     When the node has a response_format, appends StructuredOutputMappingMiddleware
     so structured output fields (e.g. approved, feedback) are spread into typed
     state fields accessible to edge routers.
+
+    Node-level ``filesystem_permissions`` in config (if present) are forwarded to
+    FilesystemMiddleware as ``_permissions`` — this is how per-agent artifact path
+    constraints are enforced without hardcoding agent names in the runtime.
     """
+    permissions_config: list[dict[str, Any]] = node_config.get("filesystem_permissions", [])
+    permissions: list[FilesystemPermission] = []
+    for p in permissions_config:
+        permissions.append(FilesystemPermission(
+            operations=p["operations"],
+            paths=[p["path"]],
+            mode=p.get("mode", "allow"),
+        ))
+
     middleware: list[Any] = [
         TodoListMiddleware(),
-        FilesystemMiddleware(),
+        FilesystemMiddleware(_permissions=permissions or None),
         PatchToolCallsMiddleware(),
     ]
     if response_format:
