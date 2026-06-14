@@ -3,7 +3,7 @@ from typing import Any
 
 import structlog
 
-from core.builder import GraphBuilder
+from core.factory import build_agent_from_definition
 from core.event_publisher import EventPublisher
 from core.executor import ExecutionManager
 
@@ -39,9 +39,7 @@ class Session:
                 "Set config.model.model_name in the first node, "
                 "or set LLM_MODEL_NAME env var"
             )
-        self.graph_builder = GraphBuilder(
-            checkpointer=execution_manager.checkpointer
-        )
+        self.checkpointer = execution_manager.checkpointer
 
     def initialize(self) -> None:
         logger.info("session_initialized", session_id=self.session_id)
@@ -55,8 +53,9 @@ class Session:
             messages = messages + [{"role": "user", "content": user_content}]
         input_payload["messages"] = messages
 
-        compiled_graph = self.graph_builder.build_from_definition(
-            self.agent_definition
+        compiled_graph = build_agent_from_definition(
+            self.agent_definition,
+            checkpointer=self.checkpointer,
         )
 
         result = self.execution_manager.execute(

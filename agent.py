@@ -11,7 +11,7 @@ from typing import Optional
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
-from core.builder import GraphBuilder
+from core.factory import build_agent_from_definition
 
 
 def load_definition(path: Path) -> dict:
@@ -24,5 +24,4 @@ def load_definition(path: Path) -> dict:
 def create_deepagents_runtime(checkpointer: Optional[BaseCheckpointSaver] = None):
     definition_path = Path(__file__).parent / "tests" / "mock" / "definition.json"
     definition = load_definition(definition_path)
-    builder = GraphBuilder(checkpointer=checkpointer)
-    return builder.build_from_definition(definition)
+    return build_agent_from_definition(definition, checkpointer)

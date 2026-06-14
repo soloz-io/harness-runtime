@@ -3,21 +3,11 @@ Structured Input/Output support for agent definitions.
 
 Handles conversion of JSON Schema response_format definitions into
 deepagents ToolStrategy objects and model resolution for structured
-output (e.g., disabling DeepSeek thinking mode which conflicts with
-tool_choice required by ToolStrategy).
-
-Usage:
-    from core.structured_output import build_tool_strategy, resolve_structured_output_model
-
-    strategy = build_tool_strategy(response_format_config)
-    if strategy:
-        model = resolve_structured_output_model(provider, model_name)
-        agent_kwargs["response_format"] = strategy
-        agent_kwargs["model"] = model
+output.
 """
 
 from collections.abc import Awaitable, Callable
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 import structlog
 from langchain.agents.middleware import AgentMiddleware
@@ -29,6 +19,28 @@ from langchain.agents.middleware.types import (
 from langchain_core.messages import AIMessage
 
 logger = structlog.get_logger(__name__)
+
+# Monkey-patch: DeepSeek requires reasoning_content to be passed back
+# for assistant messages that made tool calls with thinking mode.
+# LangChain's _convert_message_to_dict drops additional_kwargs, so we
+# inject reasoning_content into the serialized dict at the top level.
+import langchain_openai.chat_models.base as _lc_openai_base  # noqa: E402
+
+_original_convert_message_to_dict = _lc_openai_base._convert_message_to_dict
+
+
+def _patched_convert_message_to_dict(
+    message: Any,
+    api: Literal["chat/completions", "responses"] = "chat/completions",
+) -> dict[str, Any]:
+    result = _original_convert_message_to_dict(message, api)
+    if isinstance(message, AIMessage) and "reasoning_content" in message.additional_kwargs:
+        result["reasoning_content"] = message.additional_kwargs["reasoning_content"]
+    return result
+
+
+_lc_openai_base._convert_message_to_dict = _patched_convert_message_to_dict
+logger.debug("monkey_patched_convert_message_to_dict_for_reasoning_content")
 
 
 class StructuredOutputMappingMiddleware(AgentMiddleware[Any, Any, Any]):
@@ -42,41 +54,14 @@ class StructuredOutputMappingMiddleware(AgentMiddleware[Any, Any, Any]):
     Works with both ToolStrategy (tool-call-based) and ProviderStrategy (JSON-mode)
     response formats. The after_model hook returns a dict that is auto-merged into
     the LangGraph state via reducers.
-
-    Also strips reasoning_content from incoming messages before the API call
-    (for DeepSeek models where thinking mode is disabled but previous agents
-    added reasoning_content to the shared state.messages).
     """
-
-    def _strip_reasoning_content(
-        self, messages: list[Any]
-    ) -> list[Any]:
-        """Deep-copy messages and remove ``reasoning_content`` from ``additional_kwargs``."""
-        import copy
-
-        stripped = copy.deepcopy(messages)
-        for msg in stripped:
-            if hasattr(msg, "additional_kwargs") and isinstance(msg.additional_kwargs, dict):
-                msg.additional_kwargs.pop("reasoning_content", None)
-        return stripped
 
     def wrap_model_call(
         self,
         request: ModelRequest[Any],
         handler: Callable[[ModelRequest[Any]], ModelResponse[Any]],
     ) -> ModelResponse[Any] | AIMessage | ExtendedModelResponse[Any]:
-        """Strip reasoning_content from incoming messages before forwarding
-        to a thinking-disabled model, preventing DeepSeek API rejection."""
-        needs_strip = any(
-            hasattr(m, "additional_kwargs")
-            and isinstance(m.additional_kwargs, dict)
-            and "reasoning_content" in m.additional_kwargs
-            for m in request.messages
-        )
-        if needs_strip:
-            request = request.override(
-                messages=self._strip_reasoning_content(request.messages)
-            )
+        """Pass-through — no request modification needed."""
         return handler(request)
 
     async def awrap_model_call(
@@ -84,17 +69,7 @@ class StructuredOutputMappingMiddleware(AgentMiddleware[Any, Any, Any]):
         request: ModelRequest[Any],
         handler: Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]],
     ) -> ModelResponse[Any] | AIMessage | ExtendedModelResponse[Any]:
-        """Async variant of wrap_model_call."""
-        needs_strip = any(
-            hasattr(m, "additional_kwargs")
-            and isinstance(m.additional_kwargs, dict)
-            and "reasoning_content" in m.additional_kwargs
-            for m in request.messages
-        )
-        if needs_strip:
-            request = request.override(
-                messages=self._strip_reasoning_content(request.messages)
-            )
+        """Async pass-through — no request modification needed."""
         return await handler(request)
 
     def after_model(
