@@ -61,19 +61,12 @@ def compile_node(
     provider = model_cfg.get("provider", "openai")
     model_name = model_cfg.get("model_name") or model_cfg.get("model")
 
-    from core.model_factory import ModelFactory  # noqa: PLC0415
     from core.structured_output import (  # noqa: PLC0415
-        needs_thinking_disabled,
         resolve_structured_output_model,
     )
 
     response_format = config.get("response_format")
-    model_identifier = ModelFactory.resolve_model_identifier(provider, model_name)
-
-    if needs_thinking_disabled(model_identifier, response_format):
-        model = resolve_structured_output_model(provider, model_name, response_format)
-    else:
-        model = ModelFactory.create_model(provider=provider, model_name=model_name)
+    model = resolve_structured_output_model(provider, model_name, response_format)
 
     tool_names = config.get("tools", [])
     tools = []

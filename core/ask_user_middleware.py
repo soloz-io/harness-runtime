@@ -176,12 +176,18 @@ class AskUserMiddleware(AgentMiddleware[Any, ContextT, ResponseT]):
 
         _ask_user.name = "ask_user"
         self.tools = [_ask_user]
+        logger.info("AskUserMiddleware initialized with %d tool(s)", len(self.tools))
 
     def wrap_model_call(
         self,
         request: ModelRequest[ContextT],
         handler: Callable[[ModelRequest[ContextT]], ModelResponse[ResponseT]],
     ) -> ModelResponse[ResponseT] | AIMessage:
+        logger.info(
+            "AskUserMiddleware.wrap_model_call invoked; system_message has %d content_blocks: %s",
+            len(request.system_message.content_blocks) if request.system_message else 0,
+            [b.get("type") if isinstance(b, dict) else type(b).__name__ for b in (request.system_message.content_blocks if request.system_message else [])],
+        )
         if request.system_message is not None:
             new_system_content = [
                 *request.system_message.content_blocks,
@@ -191,6 +197,10 @@ class AskUserMiddleware(AgentMiddleware[Any, ContextT, ResponseT]):
             new_system_content = [{"type": "text", "text": self.system_prompt}]
         new_system_message = SystemMessage(
             content=cast("list[str | dict[str, str]]", new_system_content)
+        )
+        logger.info(
+            "AskUserMiddleware.wrap_model_call returning; new_system_message has %d content_blocks",
+            len(new_system_message.content_blocks),
         )
         return handler(request.override(system_message=new_system_message))
 

@@ -136,10 +136,17 @@ class ExecutionManager:
                     if isinstance(data, dict):
                         interrupt_val = data.get("__interrupt__")
                         if interrupt_val is not None:
+                            logger.info("executor_interrupt_detected", interrupt_val_type=type(interrupt_val).__name__)
                             interrupt_payload = None
-                            if isinstance(interrupt_val, list) and len(interrupt_val) > 0:
+                            if isinstance(interrupt_val, (list, tuple)) and len(interrupt_val) > 0:
                                 raw = interrupt_val[0]
-                                interrupt_payload = getattr(raw, "value", raw) if not isinstance(raw, dict) else raw
+                                logger.info("executor_interrupt_raw", raw_type=type(raw).__name__, raw=str(raw)[:500])
+                                if hasattr(raw, "value"):
+                                    interrupt_payload = raw.value
+                                elif isinstance(raw, dict):
+                                    interrupt_payload = raw
+                                else:
+                                    interrupt_payload = raw
                             remaining = streamed_text
                             streamed_text = ""
                             if remaining:

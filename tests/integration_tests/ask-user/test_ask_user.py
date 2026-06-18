@@ -104,12 +104,10 @@ ASK_USER_MULTI: dict[str, Any] = {
                 **AGENT_BASE["nodes"][0]["config"],
                 "allow_ask_user": True,
                 "system_prompt": (
-                    "You MUST call the ask_user tool TWICE. "
-                    "First, call it with question "
-                    "'First question: what is 2+2?'. "
-                    "After the user answers, call it again with question "
-                    "'Second question: what is 3+3?'. "
-                    "Do not respond with any text between the calls."
+                    "CRITICAL: You must call the ask_user tool now with "
+                    "one question 'what is 2+2?'. After you get the answer, "
+                    "call ask_user again with 'what is 3+3?'. "
+                    "Only call ask_user, say nothing else."
                 ),
             },
         }

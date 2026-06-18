@@ -169,4 +169,8 @@ def resolve_structured_output_model(
             **thinking_kwargs,
         )
 
-    return model_identifier
+    return ModelFactory.create_model(
+        provider=provider,
+        model_name=model_name,
+        **extra_kwargs,
+    )
