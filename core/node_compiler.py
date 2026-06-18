@@ -12,7 +12,7 @@ try:
     from deepagents.middleware.filesystem import FilesystemMiddleware
     from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
     from langchain.agents import create_agent
-    from langchain.agents.middleware import TodoListMiddleware
+    from langchain.agents.middleware import HumanInTheLoopMiddleware, TodoListMiddleware
 except ImportError as e:
     raise ImportError(
         "deepagents package is required but not installed. "
@@ -37,12 +37,9 @@ def build_node_middleware(
         FilesystemMiddleware(),
         PatchToolCallsMiddleware(),
     ]
-    if node_config.get("allow_ask_user", False):
-        try:
-            from core.ask_user_middleware import AskUserMiddleware  # noqa: PLC0415
-            middleware.append(AskUserMiddleware())
-        except ImportError:
-            pass
+    interrupt_on_config = node_config.get("interrupt_on")
+    if interrupt_on_config:
+        middleware.append(HumanInTheLoopMiddleware(interrupt_on=interrupt_on_config))
     if response_format:
         from core.structured_output import StructuredOutputMappingMiddleware  # noqa: PLC0415
         middleware.append(StructuredOutputMappingMiddleware())

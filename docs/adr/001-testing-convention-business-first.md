@@ -1,4 +1,4 @@
-# ADR-004: Business-First Integration Testing Convention
+# ADR-001: Business-First Integration Testing Convention
 
 **Date:** 2026-06-10
 **Status:** Proposed
@@ -148,4 +148,4 @@ Each package must adopt this ADR:
 
 - ADR-001: Waypoint Shared SaaS Platform Topology
 - ADR-002: Business-First State-Transition Abstraction — all tests assert business outcomes defined by this ADR's abstraction
-- ADR-003: Harness Runtime as Stdio Subprocess
+- ADR-003: Harness Runtime Architecture — Two Topology Builders

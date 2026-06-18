@@ -42,7 +42,7 @@ except ImportError:
         stacklevel=2,
     )
 
-from core.ask_user_middleware import AskUserMiddleware
+from langchain.agents.middleware import HumanInTheLoopMiddleware
 
 logger = structlog.get_logger(__name__)
 
@@ -166,8 +166,8 @@ def build_subagent(
             )
         else:
             # PATH B: Return SubAgent dict (let SubAgentMiddleware handle it)
-            # NOTE(v2): SubAgent dict path lacks AskUserMiddleware support.
-            #            The SubAgentMiddleware needs allow_ask_user plumbing.
+            # NOTE(v2): SubAgent dict path — interrupt_on is inherited from
+            #            create_deep_agent's top-level interrupt_on parameter.
             return _build_subagent_dict(
                 agent_name, model_identifier, system_prompt,
                 filtered_tools, brief_description, response_format
@@ -213,8 +213,8 @@ def _build_compiled_subagent_with_schema(
         FilesystemMiddleware(),
         PatchToolCallsMiddleware(),
     ]
-    if specialist_config.get("allow_ask_user", False):
-        middleware_stack.append(AskUserMiddleware())
+    if specialist_config.get("interrupt_on"):
+        middleware_stack.append(HumanInTheLoopMiddleware(interrupt_on=specialist_config["interrupt_on"]))
 
     create_agent_kwargs: dict[str, Any] = {
         "model": model_identifier,

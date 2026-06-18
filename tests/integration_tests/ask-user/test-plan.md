@@ -1,4 +1,4 @@
-# Ask-User / Interrupt — Test Plan
+# HITL Gate Tool / Interrupt — Test Plan
 
 See ADR-002 for test plan convention. See `test_ask_user.py` for implementation.
 
@@ -6,10 +6,10 @@ See ADR-002 for test plan convention. See `test_ask_user.py` for implementation.
 
 | ID | Journey | Assertion | Status |
 |----|---------|-----------|--------|
-| B1 | Agent with `allow_ask_user`, calls `ask_user` | `result {subtype:"interrupted", interrupt:{type:"ask_user", questions:[...], tool_call_id:"..."}}` | ✅ Passes |
-| B2 | Interrupt shape is well-formed | Fields: `type`, `questions[{question,type,choices?,required?}]`, `tool_call_id` | ✅ Covered by B1 |
-| B3 | Without `allow_ask_user` → no interrupt | `result {subtype:"success"}` with `interrupt: null` | ✅ Passes |
-| B4 | Multiple consecutive `ask_user` calls | Each produces its own `interrupted` result | ⚠️ Flaky |
+| H1 | Agent with `interrupt_on`, calls gate tool | `result {subtype:"interrupted", interrupt:{action_requests:[...], review_configs:[...]}}` | ✅ Passes |
+| H2 | Interrupt shape is well-formed | Fields: `action_requests[{name, args, description?}]`, `review_configs[{action_name, allowed_decisions}]` | ✅ Covered by H1 |
+| H3 | Without `interrupt_on` -> no interrupt | `result {subtype:"success"}` with `interrupt: null` | ✅ Passes |
+| H4 | Multiple consecutive gate tool calls | Each produces its own `interrupted` result | ⚠️ Flaky |
 
 ## Setup
 
@@ -19,4 +19,4 @@ See ADR-002 for test plan convention. See `test_ask_user.py` for implementation.
 
 ## Known Issues
 
-- B4 is flaky with deepseek-v4-flash: model is non-deterministic for tool calling and can exceed the 100s frame-read timeout. Not a code defect.
+- H4 is flaky with deepseek-v4-flash: model is non-deterministic for tool calling and can exceed the 100s frame-read timeout. Not a code defect.

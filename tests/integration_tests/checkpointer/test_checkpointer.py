@@ -11,7 +11,8 @@ Requires:
   DATABASE_URL       — PostgreSQL connection string
 
 Business journey assertions (per ADR-002):
-  E1: Interrupt → checkpoint is saved with the ask_user interrupt value
+  E1: Interrupt → checkpoint is saved with the HumanInTheLoopMiddleware
+      interrupt value
   E2: Resume → checkpoint is restored, Command(resume=...) returns
       the resume_payload to the interrupt() call site
   E3: Multiple turns with interrupts → each turn checkpoints and
@@ -55,20 +56,36 @@ from tests.integration_tests.helpers import (
 
 _MODEL = {"provider": "openai", "model_name": "deepseek-v4-flash"}
 
-AGENT_ASK_USER: dict[str, Any] = {
-    "tool_definitions": [],
+_GATE_TOOL_SCRIPT = """
+from langchain_core.tools import tool
+
+@tool
+def checkpoint_gate(response: str) -> str:
+    \"\"\"Signal checkpoint gate. The interrupt_on config pauses before execution.\"\"\"
+    return response
+"""
+
+AGENT_GATE: dict[str, Any] = {
+    "tool_definitions": [
+        {
+            "name": "checkpoint_gate",
+            "runtime": {"script": _GATE_TOOL_SCRIPT},
+        }
+    ],
     "nodes": [
         {
             "id": "orchestrator",
             "type": "orchestrator",
             "config": {
-                "name": "checkpointer-ask-user",
+                "name": "checkpointer-gate",
                 "model": dict(_MODEL),
-                "allow_ask_user": True,
+                "tools": ["checkpoint_gate"],
+                "interrupt_on": {
+                    "checkpoint_gate": {"allowed_decisions": ["approve"]}
+                },
                 "system_prompt": (
-                    "Ask the user their favorite color once using ask_user. "
-                    "When they answer, say 'Great choice!' and then stop. "
-                    "Do NOT call ask_user more than once."
+                    "Call checkpoint_gate with response 'blue' and then stop. "
+                    "Do NOT call checkpoint_gate more than once."
                 ),
             },
         }
@@ -89,13 +106,13 @@ _INPUT_PAYLOAD: dict[str, Any] = {
 def test_e1_checkpoint_saved_on_interrupt(
     harness: subprocess.Popen[bytes], artifact_dir: Path
 ) -> None:
-    """E1: Interrupt → checkpoint is saved with the ask_user interrupt value.
+    """E1: Interrupt → checkpoint is saved.
 
     Business outcome: At least one checkpoint exists in PostgreSQL for the
     session. Metadata confirms state was persisted (step > 0, messages > 0).
     """
     session_id, frames = initialize_and_assert_interrupt(
-        harness, AGENT_ASK_USER, artifact_dir
+        harness, AGENT_GATE, artifact_dir
     )
     save_artifacts(artifact_dir, frames)
 
@@ -125,7 +142,7 @@ def test_e2_resume_returns_payload(
     and the agent consumed the resume value.
     """
     session_id, frames = initialize_and_assert_interrupt(
-        harness, AGENT_ASK_USER, artifact_dir
+        harness, AGENT_GATE, artifact_dir
     )
 
     before_count = count_checkpoints(session_id)
@@ -137,9 +154,9 @@ def test_e2_resume_returns_payload(
         "request": {
             "subtype": "initialize",
             "session_id": session_id,
-            "agent_definition": AGENT_ASK_USER,
+            "agent_definition": AGENT_GATE,
             "input_payload": dict(_INPUT_PAYLOAD),
-            "resume_payload": {"status": "answered", "answers": ["blue"]},
+            "resume_payload": {"decisions": [{"type": "approve"}]},
         },
     })
     resume_frames = read_turn_fast(harness)
@@ -171,31 +188,30 @@ def test_e2_resume_returns_payload(
 def test_e3_multi_turn_checkpoints(
     harness: subprocess.Popen[bytes], artifact_dir: Path
 ) -> None:
-    """E3: Multiple turns with interrupts → each turn checkpoints and
-    resumes independently.
+    """E3: Multiple turns with interrupts → each turn checkpoints
+    and resumes independently via HumanInTheLoopMiddleware.
 
     Business outcome: Checkpoint count increases monotonically with each
     turn. Metadata step values confirm progress.
     """
     session_id, turn1 = initialize_and_assert_interrupt(
-        harness, AGENT_ASK_USER, artifact_dir
+        harness, AGENT_GATE, artifact_dir
     )
-    r1 = turn1[-1]
 
     ids_1 = get_checkpoint_ids(session_id)
     count_1 = len(ids_1)
     assert count_1 >= 1
 
-    # --- Turn 2: resume with answer → expect success ---
+    # --- Turn 2: resume with approve → expect success ---
     send(harness, {
         "type": "control_request",
         "request_id": "req_resume1",
         "request": {
             "subtype": "initialize",
             "session_id": session_id,
-            "agent_definition": AGENT_ASK_USER,
+            "agent_definition": AGENT_GATE,
             "input_payload": dict(_INPUT_PAYLOAD),
-            "resume_payload": {"status": "answered", "answers": ["4"]},
+            "resume_payload": {"decisions": [{"type": "approve"}]},
         },
     })
     turn2 = read_turn(harness)

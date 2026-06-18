@@ -121,15 +121,7 @@ class StartTopologyBuilder(TopologyBuilder):
             has_context_schema=orchestrator_context_schema is not None,
         )
 
-        orchestrator_middleware: list[Any] = []
-        if orchestrator_actual_config.get("allow_ask_user", False):
-            logger.info("allow_ask_user enabled; adding AskUserMiddleware")
-            try:
-                from core.ask_user_middleware import AskUserMiddleware  # noqa: PLC0415
-                orchestrator_middleware.append(AskUserMiddleware())
-                logger.info("AskUserMiddleware added to orchestrator middleware stack")
-            except ImportError as e:
-                logger.error("failed_to_import_AskUserMiddleware", error=str(e))
+        interrupt_on_config = orchestrator_actual_config.get("interrupt_on")
 
         deep_agent_kwargs: dict[str, Any] = {
             "model": resolve_structured_output_model(
@@ -141,8 +133,9 @@ class StartTopologyBuilder(TopologyBuilder):
             "tools": orchestrator_tools,
             "subagents": compiled_subagents,
             "checkpointer": checkpointer,
-            "middleware": orchestrator_middleware,
         }
+        if interrupt_on_config:
+            deep_agent_kwargs["interrupt_on"] = interrupt_on_config
         if orchestrator_response_format is not None:
             deep_agent_kwargs["response_format"] = orchestrator_response_format
         if orchestrator_state_schema is not None:
