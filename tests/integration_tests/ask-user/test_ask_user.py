@@ -26,21 +26,21 @@ Run with:
 from __future__ import annotations
 
 import json
-import os
-import select
 import subprocess
-import sys
-import time
-import uuid
 from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
 
-import pytest
-
 env_path = Path(__file__).parent.parent.parent.parent / ".env"
 load_dotenv(dotenv_path=env_path)
+
+from tests.integration_tests.helpers import (
+    read_frame,
+    read_turn,
+    save_artifacts,
+    send,
+)
 
 # ---------------------------------------------------------------------------
 # Agent definitions — inline test data, not business logic (ADR-004 §5)
@@ -118,114 +118,6 @@ _INPUT_PAYLOAD: dict[str, Any] = {
     "messages": [{"role": "user", "content": "Help me make a decision."}]
 }
 
-# ---------------------------------------------------------------------------
-# Fixture: CLI subprocess
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture(scope="function")
-def harness(artifact_dir: Path) -> subprocess.Popen[bytes]:
-    """Start the CLI subprocess once per test, saving artifacts."""
-    cli_path = Path(__file__).parent.parent.parent.parent / "cli.py"
-    if not cli_path.exists():
-        import shutil
-
-        installed = shutil.which("harness-runtime")
-        if not installed:
-            pytest.fail(
-                "harness-runtime not found. Install with: pip install -e ."
-            )
-        cli_path = Path(installed)
-
-    log_dir = Path(__file__).parent.parent.parent / "log"
-    log_dir.mkdir(parents=True, exist_ok=True)
-
-    proc = subprocess.Popen(
-        [sys.executable, str(cli_path)],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env={
-            **os.environ,
-            "PYTHONUNBUFFERED": "1",
-            "HARNESS_LOG_FILE": str(log_dir / "harness-cli.log"),
-            "HARNESS_LOG_LEVEL": "DEBUG",
-        },
-    )
-
-    for _ in range(100):
-        if proc.poll() is not None:
-            pytest.fail(f"CLI exited prematurely (code {proc.returncode})")
-        time.sleep(0.1)
-
-    yield proc
-
-    proc.stdin.close()
-    try:
-        proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.wait(timeout=5)
-
-    if proc.stderr:
-        stderr = proc.stderr.read()
-        if stderr:
-            (artifact_dir / "stderr.log").write_bytes(stderr)
-
-
-# ---------------------------------------------------------------------------
-# NDJSON helpers
-# ---------------------------------------------------------------------------
-
-
-def _send(proc: subprocess.Popen[bytes], obj: dict[str, Any]) -> None:
-    assert proc.stdin is not None
-    proc.stdin.write(json.dumps(obj).encode() + b"\n")
-    proc.stdin.flush()
-
-
-def _read_frame(proc: subprocess.Popen[bytes]) -> dict[str, Any]:
-    assert proc.stdout is not None
-    for _ in range(200):
-        if proc.poll() is not None:
-            time.sleep(0.1)
-            leftover = proc.stdout.read()
-            raise EOFError(
-                f"CLI exited (code {proc.returncode})"
-                + (f" leftover stdout: {leftover.decode()[:500]}" if leftover else "")
-            )
-        r, _, _ = select.select([proc.stdout], [], [], 0.5)
-        if r:
-            line = proc.stdout.readline()
-            if not line:
-                time.sleep(0.1)
-                leftover = proc.stdout.read()
-                raise EOFError(
-                    f"stdout closed (exit code {proc.poll()})"
-                    + (f" leftover stdout: {leftover.decode()[:500]}" if leftover else "")
-                )
-            return json.loads(line)
-    raise TimeoutError("No frame received within 100s")
-
-
-def _read_turn(proc: subprocess.Popen[bytes]) -> list[dict[str, Any]]:
-    """Read frames until result."""
-    frames: list[dict[str, Any]] = []
-    while True:
-        frame = _read_frame(proc)
-        frames.append(frame)
-        if frame.get("type") == "result":
-            break
-    return frames
-
-
-def _save_artifacts(
-    artifact_dir: Path, frames: list[dict[str, Any]], stderr: bytes = b""
-) -> None:
-    (artifact_dir / "frames.json").write_text(json.dumps(frames, indent=2, default=str))
-    if stderr:
-        (artifact_dir / "stderr.log").write_bytes(stderr)
-
 
 # ---------------------------------------------------------------------------
 # Tests
@@ -239,7 +131,7 @@ def test_ask_user_delivers_interrupt(
 
     Business outcome: SDK receives interrupt with questions it can render.
     """
-    _send(harness, {
+    send(harness, {
         "type": "control_request",
         "request_id": "req_1",
         "request": {
@@ -248,20 +140,20 @@ def test_ask_user_delivers_interrupt(
             "input_payload": dict(_INPUT_PAYLOAD),
         },
     })
-    init = _read_frame(harness)
+    init = read_frame(harness)
     assert init["type"] == "control_response"
     assert init["response"]["subtype"] == "success"
     session_id: str = init["response"]["session_id"]
     assert len(session_id) > 0
 
-    _send(harness, {
+    send(harness, {
         "type": "user",
         "message": {"role": "user", "content": "I need help deciding."},
         "session_id": None,
         "parent_tool_use_id": None,
     })
-    frames = _read_turn(harness)
-    _save_artifacts(artifact_dir, frames)
+    frames = read_turn(harness)
+    save_artifacts(artifact_dir, frames)
 
     result = frames[-1]
     assert result["type"] == "result"
@@ -291,7 +183,7 @@ def test_ask_user_not_configured(
 
     Business outcome: No interrupt emitted, result is success.
     """
-    _send(harness, {
+    send(harness, {
         "type": "control_request",
         "request_id": "req_1",
         "request": {
@@ -300,18 +192,18 @@ def test_ask_user_not_configured(
             "input_payload": dict(_INPUT_PAYLOAD),
         },
     })
-    init = _read_frame(harness)
+    init = read_frame(harness)
     assert init["type"] == "control_response"
     assert init["response"]["subtype"] == "success"
 
-    _send(harness, {
+    send(harness, {
         "type": "user",
         "message": {"role": "user", "content": "Say hello."},
         "session_id": None,
         "parent_tool_use_id": None,
     })
-    frames = _read_turn(harness)
-    _save_artifacts(artifact_dir, frames)
+    frames = read_turn(harness)
+    save_artifacts(artifact_dir, frames)
 
     result = frames[-1]
     assert result["type"] == "result"
@@ -328,7 +220,7 @@ def test_ask_user_multi_interrupt(
     and the user can answer both in sequence across multiple turns.
     """
     # --- Turn 1: initialize ---
-    _send(harness, {
+    send(harness, {
         "type": "control_request",
         "request_id": "req_1",
         "request": {
@@ -337,20 +229,20 @@ def test_ask_user_multi_interrupt(
             "input_payload": dict(_INPUT_PAYLOAD),
         },
     })
-    init = _read_frame(harness)
+    init = read_frame(harness)
     assert init["type"] == "control_response"
     assert init["response"]["subtype"] == "success"
     session_id: str = init["response"]["session_id"]
     assert len(session_id) > 0
 
     # --- Turn 2: user message → expect first interrupt ---
-    _send(harness, {
+    send(harness, {
         "type": "user",
         "message": {"role": "user", "content": "I need help deciding."},
         "session_id": None,
         "parent_tool_use_id": None,
     })
-    frames_1 = _read_turn(harness)
+    frames_1 = read_turn(harness)
     result_1 = frames_1[-1]
     assert result_1["type"] == "result"
     assert result_1["subtype"] == "interrupted"
@@ -358,7 +250,7 @@ def test_ask_user_multi_interrupt(
     assert len(result_1["interrupt"]["questions"]) > 0
 
     # --- Turn 3: resume with answer to first question → expect second interrupt ---
-    _send(harness, {
+    send(harness, {
         "type": "control_request",
         "request_id": "req_2",
         "request": {
@@ -369,7 +261,7 @@ def test_ask_user_multi_interrupt(
             "resume_payload": {"status": "answered", "answers": ["4"]},
         },
     })
-    frames_2 = _read_turn(harness)
+    frames_2 = read_turn(harness)
     result_2 = frames_2[-1]
     assert result_2["type"] == "result"
     assert result_2["subtype"] == "interrupted", (
@@ -380,12 +272,12 @@ def test_ask_user_multi_interrupt(
     assert len(result_2["interrupt"]["questions"]) > 0
 
     # Drain the control_response that comes after the result
-    ctrl_2 = _read_frame(harness)
+    ctrl_2 = read_frame(harness)
     assert ctrl_2["type"] == "control_response"
     assert ctrl_2["response"]["subtype"] == "success"
 
     # --- Turn 4: resume with answer to second question → expect success ---
-    _send(harness, {
+    send(harness, {
         "type": "control_request",
         "request_id": "req_3",
         "request": {
@@ -396,7 +288,7 @@ def test_ask_user_multi_interrupt(
             "resume_payload": {"status": "answered", "answers": ["9"]},
         },
     })
-    frames_3 = _read_turn(harness)
+    frames_3 = read_turn(harness)
     result_3 = frames_3[-1]
     assert result_3["type"] == "result"
     assert result_3["subtype"] == "success", (
@@ -406,4 +298,4 @@ def test_ask_user_multi_interrupt(
 
     # Save all frames for debugging
     all_frames = frames_1 + frames_2 + frames_3
-    _save_artifacts(artifact_dir, all_frames)
+    save_artifacts(artifact_dir, all_frames)
