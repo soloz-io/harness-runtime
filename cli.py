@@ -1,24 +1,20 @@
+import asyncio
 import json
 import logging
 import os
 import sys
 from pathlib import Path
-from typing import NoReturn
+from typing import Any, NoReturn
 
 import structlog
 from dotenv import load_dotenv
-
-from core.event_publisher import StdioPublisher
-from core.executor import ExecutionManager
-from core.session import Session
 
 env_path = Path(__file__).parent / ".env"
 load_dotenv(dotenv_path=env_path)
 
 # ---------------------------------------------------------------------------
-# Logging configuration
+# Logging configuration — must be before core imports (they log at import time)
 # ---------------------------------------------------------------------------
-# File logging (dev/test debugging, disabled unless HARNESS_LOG_FILE is set)
 _log_level = os.getenv("HARNESS_LOG_LEVEL")
 _log_file = os.getenv("HARNESS_LOG_FILE")
 
@@ -38,6 +34,12 @@ structlog.configure(
     logger_factory=structlog.PrintLoggerFactory(sys.stderr),
     cache_logger_on_first_use=True,
 )
+
+from core.event_publisher import StdioPublisher
+from core.executor import ExecutionManager
+from core.session import Session
+
+logger = structlog.get_logger(__name__)
 
 
 def main() -> None:
@@ -84,14 +86,31 @@ def main() -> None:
                 if subtype == "initialize":
                     agent_definition = request.get("agent_definition", {})
                     input_payload = request.get("input_payload", {})
+                    resume_payload: Any = request.get("resume_payload")
+                    existing_session_id: str | None = request.get("session_id")
+                    mcp_servers: list[dict[str, Any]] = request.get("sdk_mcp_servers", [])
 
                     session = Session(
                         agent_definition=agent_definition,
                         input_payload=input_payload,
                         execution_manager=execution_manager,
                         publisher=publisher,
+                        mcp_servers=mcp_servers,
+                        session_id=existing_session_id,
                     )
-                    session.initialize()
+                    session.initialize(resume_payload=resume_payload)
+
+                    user_mcp_servers = agent_definition.get("mcp_servers", [])
+                    if mcp_servers:
+                        try:
+                            asyncio.run(session.initialize_async())
+                        except Exception:
+                            if user_mcp_servers:
+                                raise
+                            logger.warning("sdk_mcp_tools_load_failed", exc_info=True)
+
+                    if resume_payload:
+                        session.resume_turn(resume_payload)
 
                     publisher.publish_control_response(
                         request_id=request_id,
@@ -136,6 +155,11 @@ def main() -> None:
     finally:
         if execution_manager:
             execution_manager.close()
+        if session:
+            try:
+                asyncio.run(session.cleanup())
+            except Exception:
+                pass
 
 
 def _error_exit(message: str, code: int = 1) -> NoReturn:

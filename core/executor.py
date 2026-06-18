@@ -88,6 +88,7 @@ class ExecutionManager:
         model_name: str,
         agent_definition: Optional[dict[str, Any]] = None,
         num_turns: int = 1,
+        resume_payload: Optional[Any] = None,
     ) -> str:
         start_time = time.time()
         streamed_text = ""
@@ -106,8 +107,14 @@ class ExecutionManager:
                 tools=tools,
             )
 
+            if resume_payload is not None:
+                from langgraph.types import Command
+                stream_input: Any = Command(resume=resume_payload)
+            else:
+                stream_input = input_payload
+
             for event in graph.stream(
-                input_payload, config, stream_mode=["values", "messages"]
+                stream_input, config, stream_mode=["values", "messages"]
             ):
                 if not isinstance(event, tuple) or len(event) != 2:
                     continue
@@ -127,6 +134,30 @@ class ExecutionManager:
 
                 elif mode == "values":
                     if isinstance(data, dict):
+                        interrupt_val = data.get("__interrupt__")
+                        if interrupt_val is not None:
+                            interrupt_payload = None
+                            if isinstance(interrupt_val, list) and len(interrupt_val) > 0:
+                                raw = interrupt_val[0]
+                                interrupt_payload = getattr(raw, "value", raw) if not isinstance(raw, dict) else raw
+                            remaining = streamed_text
+                            streamed_text = ""
+                            if remaining:
+                                self.publisher.publish_assistant(
+                                    session_id=session_id,
+                                    model=model_name,
+                                    content=[{"type": "text", "text": remaining}],
+                                )
+                            duration_ms = int((time.time() - start_time) * 1000)
+                            self.publisher.publish_result(
+                                session_id=session_id,
+                                subtype="interrupted",
+                                duration_ms=duration_ms,
+                                num_turns=num_turns,
+                                result=remaining or None,
+                                interrupt=interrupt_payload,
+                            )
+                            return ""
                         msgs: list[Any] = data.get("messages", [])
                         if len(msgs) > len(final_messages):
                             for msg in msgs[len(final_messages):]:

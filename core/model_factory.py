@@ -47,14 +47,14 @@ def _create_model_for_provider(provider: str, model_name: str, api_key: str, **e
     if provider == "anthropic":
         from langchain_anthropic import ChatAnthropic
         return ChatAnthropic(**kwargs)
-    elif provider == "openai":
+    if provider == "openai":
         base_url = _resolve_openai_base_url(model_name, extra_kwargs)
         if base_url:
             kwargs["base_url"] = base_url
+            kwargs["use_responses_api"] = False
         from langchain_openai import ChatOpenAI
         return ChatOpenAI(**kwargs)
-    else:
-        raise ValueError(f"Unsupported provider: {provider}")
+    raise ValueError(f"Unsupported provider: {provider}")
 
 
 class ModelFactory:

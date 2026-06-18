@@ -42,6 +42,8 @@ except ImportError:
         stacklevel=2,
     )
 
+from core.ask_user_middleware import AskUserMiddleware
+
 logger = structlog.get_logger(__name__)
 
 
@@ -164,6 +166,8 @@ def build_subagent(
             )
         else:
             # PATH B: Return SubAgent dict (let SubAgentMiddleware handle it)
+            # NOTE(v2): SubAgent dict path lacks AskUserMiddleware support.
+            #            The SubAgentMiddleware needs allow_ask_user plumbing.
             return _build_subagent_dict(
                 agent_name, model_identifier, system_prompt,
                 filtered_tools, brief_description, response_format
@@ -205,15 +209,19 @@ def _build_compiled_subagent_with_schema(
     )
 
     # Build agent runnable with context_schema and optional response_format
+    middleware_stack = [
+        FilesystemMiddleware(),
+        PatchToolCallsMiddleware(),
+    ]
+    if specialist_config.get("allow_ask_user", False):
+        middleware_stack.append(AskUserMiddleware())
+
     create_agent_kwargs: dict[str, Any] = {
         "model": model_identifier,
         "system_prompt": system_prompt,
         "tools": filtered_tools,
         "context_schema": state_schema_class,
-        "middleware": [
-            FilesystemMiddleware(),
-            PatchToolCallsMiddleware()
-        ],
+        "middleware": middleware_stack,
     }
     if response_format is not None:
         create_agent_kwargs["response_format"] = response_format

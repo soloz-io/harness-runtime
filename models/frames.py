@@ -135,6 +135,7 @@ class ResultFrame:
     result: Optional[str] = None
     structured_response: Optional[Any] = None
     files: Optional[dict[str, Any]] = None
+    interrupt: Optional[dict[str, Any]] = None
 
 
 @dataclass

@@ -1,11 +1,12 @@
 import uuid
-from typing import Any
+from typing import Any, Optional
 
 import structlog
 
-from core.factory import build_agent_from_definition
 from core.event_publisher import EventPublisher
 from core.executor import ExecutionManager
+from core.factory import build_agent_from_definition
+from core.mcp_loader import load_mcp_tools_from_servers
 
 logger = structlog.get_logger(__name__)
 
@@ -17,13 +18,18 @@ class Session:
         input_payload: dict[str, Any],
         execution_manager: ExecutionManager,
         publisher: EventPublisher,
+        mcp_servers: Optional[list[dict[str, Any]]] = None,
+        session_id: Optional[str] = None,
     ) -> None:
-        self.session_id = f"sess_{uuid.uuid4().hex[:24]}"
+        self.session_id = session_id or f"sess_{uuid.uuid4().hex[:24]}"
         self.agent_definition = agent_definition
         self.base_payload = input_payload
         self.execution_manager = execution_manager
         self.publisher = publisher
         self.turns = 0
+        self.mcp_servers = mcp_servers or []
+        self.mcp_tools: dict[str, Any] = {}
+        self.mcp_handles: list[Any] = []
         self.model_name: str | None = None
         nodes = agent_definition.get("nodes", [])
         if nodes:
@@ -41,8 +47,19 @@ class Session:
             )
         self.checkpointer = execution_manager.checkpointer
 
-    def initialize(self) -> None:
-        logger.info("session_initialized", session_id=self.session_id)
+    async def initialize_async(self) -> None:
+        if self.mcp_servers:
+            mcp_tools, handles = await load_mcp_tools_from_servers(self.mcp_servers)
+            self.mcp_tools = mcp_tools
+            self.mcp_handles = handles
+            logger.info("mcp_tools_loaded", count=len(mcp_tools), servers=[s.get("name") for s in self.mcp_servers])
+
+    def initialize(self, resume_payload: Optional[Any] = None) -> None:
+        if resume_payload:
+            logger.info("session_resuming", session_id=self.session_id, has_resume=True)
+        else:
+            logger.info("session_initialized", session_id=self.session_id)
+        self.resume_payload = resume_payload
 
     def run_turn(self, user_content: str = "") -> str:
         self.turns += 1
@@ -56,8 +73,10 @@ class Session:
         compiled_graph = build_agent_from_definition(
             self.agent_definition,
             checkpointer=self.checkpointer,
+            extra_tools=self.mcp_tools if self.mcp_tools else None,
         )
 
+        resume = getattr(self, "resume_payload", None)
         result = self.execution_manager.execute(
             graph=compiled_graph,
             session_id=self.session_id,
@@ -65,6 +84,31 @@ class Session:
             model_name=self.model_name,
             agent_definition=self.agent_definition,
             num_turns=self.turns,
+            resume_payload=resume,
         )
 
         return result
+
+    def resume_turn(self, resume_payload: Any) -> str:
+        self.turns += 1
+        compiled_graph = build_agent_from_definition(
+            self.agent_definition,
+            checkpointer=self.checkpointer,
+            extra_tools=self.mcp_tools if self.mcp_tools else None,
+        )
+        result = self.execution_manager.execute(
+            graph=compiled_graph,
+            session_id=self.session_id,
+            input_payload={},
+            model_name=self.model_name,
+            agent_definition=self.agent_definition,
+            num_turns=self.turns,
+            resume_payload=resume_payload,
+        )
+        return result
+
+    async def cleanup(self) -> None:
+        for handle in self.mcp_handles:
+            await handle.cleanup()
+        self.mcp_handles = []
+        self.mcp_tools = {}

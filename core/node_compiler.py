@@ -37,6 +37,12 @@ def build_node_middleware(
         FilesystemMiddleware(),
         PatchToolCallsMiddleware(),
     ]
+    if node_config.get("allow_ask_user", False):
+        try:
+            from core.ask_user_middleware import AskUserMiddleware  # noqa: PLC0415
+            middleware.append(AskUserMiddleware())
+        except ImportError:
+            pass
     if response_format:
         from core.structured_output import StructuredOutputMappingMiddleware  # noqa: PLC0415
         middleware.append(StructuredOutputMappingMiddleware())
