@@ -256,6 +256,7 @@ class GraphBuilder:
                 "tools": orchestrator_tools,
                 "subagents": compiled_subagents,
                 "checkpointer": self.checkpointer,
+                "debug": True,
             }
             if orchestrator_response_format is not None:
                 deep_agent_kwargs["response_format"] = orchestrator_response_format

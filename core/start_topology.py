@@ -133,6 +133,7 @@ class StartTopologyBuilder(TopologyBuilder):
             "tools": orchestrator_tools,
             "subagents": compiled_subagents,
             "checkpointer": checkpointer,
+            "debug": True,
         }
         if interrupt_on_config:
             deep_agent_kwargs["interrupt_on"] = interrupt_on_config
