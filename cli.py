@@ -109,13 +109,23 @@ def main() -> None:
                                 raise
                             logger.warning("sdk_mcp_tools_load_failed", exc_info=True)
 
-                    if resume_payload:
-                        session.resume_turn(resume_payload)
-
                     publisher.publish_control_response(
                         request_id=request_id,
                         session_id=session.session_id,
                     )
+
+                    if resume_payload:
+                        try:
+                            session.resume_turn(resume_payload)
+                        except Exception as e:
+                            logger.error(f"Error during resume_turn: {e}", exc_info=True)
+                            publisher.publish_result(
+                                session_id=session.session_id,
+                                subtype="error_during_execution",
+                                is_error=True,
+                                result=str(e),
+                            )
+                            sys.exit(1)
 
                 elif subtype == "interrupt":
                     publisher.publish_control_response(
