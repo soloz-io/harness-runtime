@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -102,14 +103,27 @@ async def handle_message(session_id: str, body: dict[str, Any]) -> dict[str, Any
 
 
 @router.get("/event")
-async def stream_events() -> EventSourceResponse:
+async def stream_events(session_id: Optional[str] = None) -> EventSourceResponse:
+    if session_id:
+        deadline = time.time() + 30
+        while session_id not in _session_store:
+            if time.time() > deadline:
+                raise HTTPException(
+                    status_code=404, detail=f"Session {session_id} not found within timeout"
+                )
+            await asyncio.sleep(0.1)
+
     if not _session_store:
         raise HTTPException(status_code=404, detail="No active sessions")
 
-    latest_state = list(_session_store.values())[-1]
-    publisher = latest_state.publisher
+    state = _session_store[session_id] if session_id else list(_session_store.values())[-1]
+    publisher = state.publisher
 
     async def event_generator() -> AsyncGenerator[dict[str, Any], None]:
+        yield {
+            "event": "message",
+            "data": json.dumps({"type": "connected", "session_id": session_id}),
+        }
         while True:
             event_data = await publisher.next_event()
             if event_data is None:
