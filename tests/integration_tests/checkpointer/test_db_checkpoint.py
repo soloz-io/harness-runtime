@@ -29,7 +29,11 @@ MOCK_DATA = Path(__file__).parent.parent / "mock" / "simple-bug-fix-invoke-reque
 
 # Fail hard if requirements not met
 _MISSING: list[str] = []
-if not os.environ.get("OPENAI_API_KEY") and not os.environ.get("DEEPSEEK_API_KEY") and not os.environ.get("ANTHROPIC_API_KEY"):
+if (
+    not os.environ.get("OPENAI_API_KEY")
+    and not os.environ.get("DEEPSEEK_API_KEY")
+    and not os.environ.get("ANTHROPIC_API_KEY")
+):
     _MISSING.append("OPENAI_API_KEY, DEEPSEEK_API_KEY, or ANTHROPIC_API_KEY")
 if not os.environ.get("DATABASE_URL"):
     _MISSING.append("DATABASE_URL (PostgreSQL connection string)")
@@ -56,27 +60,33 @@ def test_initialize_and_single_turn(harness: subprocess.Popen[bytes], artifact_d
     step = list(payloads["requests"].values())[0]
     user_content = step["input_payload"]["messages"][0]["content"]
 
-    send(harness, {
-        "type": "control_request",
-        "request_id": "req_1",
-        "request": {
-            "subtype": "initialize",
-            "agent_definition": step["agent_definition"],
-            "input_payload": step["input_payload"],
+    send(
+        harness,
+        {
+            "type": "control_request",
+            "request_id": "req_1",
+            "request": {
+                "subtype": "initialize",
+                "agent_definition": step["agent_definition"],
+                "input_payload": step["input_payload"],
+            },
         },
-    })
+    )
     init_resp = read_frame(harness)
     assert init_resp["type"] == "control_response"
     assert init_resp["response"]["subtype"] == "success"
     session_id = init_resp["response"]["session_id"]
     assert len(session_id) > 0
 
-    send(harness, {
-        "type": "user",
-        "message": {"role": "user", "content": user_content},
-        "session_id": None,
-        "parent_tool_use_id": None,
-    })
+    send(
+        harness,
+        {
+            "type": "user",
+            "message": {"role": "user", "content": user_content},
+            "session_id": None,
+            "parent_tool_use_id": None,
+        },
+    )
     frames = read_turn(harness)
     save_artifacts(artifact_dir, frames)
 
@@ -90,14 +100,19 @@ def test_initialize_and_single_turn(harness: subprocess.Popen[bytes], artifact_d
     count_checkpoints(session_id)
 
 
-def test_user_without_initialize_returns_error(harness: subprocess.Popen[bytes], artifact_dir: Path) -> None:
+def test_user_without_initialize_returns_error(
+    harness: subprocess.Popen[bytes], artifact_dir: Path
+) -> None:
     """User message without initialize → error result frame."""
-    send(harness, {
-        "type": "user",
-        "message": {"role": "user", "content": "hello"},
-        "session_id": None,
-        "parent_tool_use_id": None,
-    })
+    send(
+        harness,
+        {
+            "type": "user",
+            "message": {"role": "user", "content": "hello"},
+            "session_id": None,
+            "parent_tool_use_id": None,
+        },
+    )
     frames = read_turn(harness)
     save_artifacts(artifact_dir, frames)
     assert frames[-1]["type"] == "result"

@@ -110,7 +110,9 @@ def build_tool_strategy(response_format: Any) -> Any:
         )
         return strategy
     except ImportError:
-        logger.warning("ToolStrategy not available — langchain.agents.structured_output not installed")
+        logger.warning(
+            "ToolStrategy not available — langchain.agents.structured_output not installed"
+        )
         return None
     except Exception as e:
         logger.error("failed_to_create_tool_strategy", error=str(e))

@@ -60,9 +60,7 @@ def create_model_identifier(provider: str, model_name: str) -> str:
     supported_providers = ["openai", "anthropic", "ollama"]
     if provider not in supported_providers:
         logger.warning(
-            "unsupported_provider",
-            provider=provider,
-            supported_providers=supported_providers
+            "unsupported_provider", provider=provider, supported_providers=supported_providers
         )
 
     model_identifier = f"{provider}:{model_name}"
@@ -71,7 +69,7 @@ def create_model_identifier(provider: str, model_name: str) -> str:
         "model_identifier_created",
         provider=provider,
         model_name=model_name,
-        identifier=model_identifier
+        identifier=model_identifier,
     )
 
     return model_identifier

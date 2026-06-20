@@ -34,15 +34,15 @@ from .test_helpers import get_output_dir
 class TeeStream:
     """
     Stream that writes to both original stream (console) and log file.
-    
+
     This allows us to capture all stdout/stderr while still showing output
     in the console for real-time monitoring.
     """
-    
+
     def __init__(self, original_stream: TextIO, log_file: TextIO):
         self.original_stream = original_stream
         self.log_file = log_file
-        
+
     def write(self, text: str) -> None:
         """Write text to both original stream and log file."""
         # Write to original stream (console)
@@ -51,7 +51,7 @@ class TeeStream:
         # Also write to log file
         self.log_file.write(text)
         self.log_file.flush()
-        
+
     def flush(self) -> None:
         """Flush both streams."""
         self.original_stream.flush()
@@ -62,16 +62,16 @@ class TeeStream:
 def LogCapture(test_name: str = "test") -> Generator[Path, None, None]:
     """
     Context manager for comprehensive log capture.
-    
+
     Captures all logs, stdout, and stderr to a timestamped file in the outputs
     directory. Automatically restores original logging configuration on exit.
-    
+
     Args:
         test_name: Name prefix for the log file
-        
+
     Yields:
         Path to the log file being written
-        
+
     Example:
         with LogCapture("integration_test") as log_file:
             print("This goes to console and log file")
@@ -82,43 +82,41 @@ def LogCapture(test_name: str = "test") -> Generator[Path, None, None]:
     log_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     log_filename = f"{test_name}_{log_timestamp}.log"
     log_filepath = get_output_dir() / log_filename
-    
+
     # Store original state
     original_stdout = sys.stdout
     original_stderr = sys.stderr
     root_logger = logging.getLogger()
     original_level = root_logger.level
     original_handlers = root_logger.handlers.copy()
-    
+
     # Open log file
-    log_file = open(log_filepath, 'w')
-    
+    log_file = open(log_filepath, "w")
+
     try:
         print(f"\n[LOG_CAPTURE] All logs will be saved to: {log_filepath}")
         print("=" * 80)
-        
+
         # ================================================================
         # SETUP PYTHON LOGGING CAPTURE
         # ================================================================
-        
+
         # Create file handler for all logs
-        file_handler = logging.FileHandler(log_filepath, mode='a')
+        file_handler = logging.FileHandler(log_filepath, mode="a")
         file_handler.setLevel(logging.DEBUG)
-        
+
         # Create detailed formatter
-        formatter = logging.Formatter(
-            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-        )
+        formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
         file_handler.setFormatter(formatter)
-        
+
         # Configure root logger to capture all library logs
         root_logger.setLevel(logging.DEBUG)
         root_logger.addHandler(file_handler)
-        
+
         # ================================================================
         # SETUP STRUCTLOG CAPTURE (used by the application)
         # ================================================================
-        
+
         structlog.configure(
             processors=[
                 structlog.stdlib.filter_by_level,
@@ -129,69 +127,69 @@ def LogCapture(test_name: str = "test") -> Generator[Path, None, None]:
                 structlog.processors.StackInfoRenderer(),
                 structlog.processors.format_exc_info,
                 structlog.processors.UnicodeDecoder(),
-                structlog.processors.JSONRenderer()
+                structlog.processors.JSONRenderer(),
             ],
             context_class=dict,
             logger_factory=structlog.stdlib.LoggerFactory(),
             wrapper_class=structlog.stdlib.BoundLogger,
             cache_logger_on_first_use=True,
         )
-        
+
         # ================================================================
         # SETUP STDOUT/STDERR CAPTURE
         # ================================================================
-        
+
         # Redirect stdout and stderr to capture all print statements
         sys.stdout = TeeStream(original_stdout, log_file)
         sys.stderr = TeeStream(original_stderr, log_file)
-        
+
         # Write initial log header
         log_file.write(f"\n{'=' * 80}\n")
         log_file.write(f"LOG CAPTURE STARTED: {datetime.now().isoformat()}\n")
         log_file.write(f"Test: {test_name}\n")
         log_file.write(f"{'=' * 80}\n\n")
         log_file.flush()
-        
+
         # Yield the log file path to the caller
         yield log_filepath
-        
+
     finally:
         # ================================================================
         # CLEANUP AND RESTORE ORIGINAL STATE
         # ================================================================
-        
+
         # Write final log footer
         log_file.write(f"\n{'=' * 80}\n")
         log_file.write(f"LOG CAPTURE ENDED: {datetime.now().isoformat()}\n")
         log_file.write(f"{'=' * 80}\n")
-        
+
         # Restore stdout/stderr
         sys.stdout = original_stdout
         sys.stderr = original_stderr
-        
+
         # Restore root logger
         root_logger.setLevel(original_level)
         root_logger.handlers = original_handlers
-        
+
         # Close log file
         log_file.close()
-        
+
         print(f"[LOG_CAPTURE] Logs saved to: {log_filepath}")
 
 
 def setup_test_logging(test_name: str) -> tuple[Path, callable]:
     """
     Alternative non-context-manager setup for log capture.
-    
+
     Use this if you need more control over when logging starts/stops.
     Remember to call the cleanup function when done!
-    
+
     Args:
         test_name: Name prefix for the log file
-        
+
     Returns:
         Tuple of (log_file_path, cleanup_function)
-        
+
     Example:
         log_path, cleanup = setup_test_logging("my_test")
         try:

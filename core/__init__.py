@@ -36,13 +36,11 @@ from core.tool_loader import ToolLoadingError, load_tools_from_definition
 __all__ = [
     # Main API
     "build_agent_from_definition",
-
     # Modular functions
     "load_tools_from_definition",
     "create_model_identifier",
     "build_subagent",
-
     # Exceptions
     "ToolLoadingError",
-    "SubAgentCompilationError"
+    "SubAgentCompilationError",
 ]

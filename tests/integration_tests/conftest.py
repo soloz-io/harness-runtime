@@ -21,11 +21,10 @@ def harness(artifact_dir: Path) -> subprocess.Popen[bytes]:
     cli_path = Path(__file__).parent.parent.parent / "cli.py"
     if not cli_path.exists():
         import shutil
+
         installed = shutil.which("harness-runtime")
         if not installed:
-            pytest.fail(
-                "harness-runtime not found. Install with: pip install -e ."
-            )
+            pytest.fail("harness-runtime not found. Install with: pip install -e .")
         cli_path = Path(installed)
 
     log_dir = Path(__file__).parent.parent / "log"

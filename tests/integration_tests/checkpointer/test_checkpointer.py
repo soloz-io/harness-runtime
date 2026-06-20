@@ -80,9 +80,7 @@ AGENT_GATE: dict[str, Any] = {
                 "name": "checkpointer-gate",
                 "model": dict(_MODEL),
                 "tools": ["checkpoint_gate"],
-                "interrupt_on": {
-                    "checkpoint_gate": {"allowed_decisions": ["approve"]}
-                },
+                "interrupt_on": {"checkpoint_gate": {"allowed_decisions": ["approve"]}},
                 "system_prompt": (
                     "Call checkpoint_gate with response 'blue' and then stop. "
                     "Do NOT call checkpoint_gate more than once."
@@ -111,9 +109,7 @@ def test_e1_checkpoint_saved_on_interrupt(
     Business outcome: At least one checkpoint exists in PostgreSQL for the
     session. Metadata confirms state was persisted (step > 0, messages > 0).
     """
-    session_id, frames = initialize_and_assert_interrupt(
-        harness, AGENT_GATE, artifact_dir
-    )
+    session_id, frames = initialize_and_assert_interrupt(harness, AGENT_GATE, artifact_dir)
     save_artifacts(artifact_dir, frames)
 
     count = count_checkpoints(session_id)
@@ -127,38 +123,35 @@ def test_e1_checkpoint_saved_on_interrupt(
     counters = metadata.get("counters_since_delta_snapshot", {})
     msg_counters = counters.get("messages", [0, 0])
     assert msg_counters[0] >= 0, "Invalid message counter"
-    assert msg_counters[1] >= 1, (
-        f"Expected at least 1 total message version, got {msg_counters[1]}"
-    )
+    assert msg_counters[1] >= 1, f"Expected at least 1 total message version, got {msg_counters[1]}"
 
 
-def test_e2_resume_returns_payload(
-    harness: subprocess.Popen[bytes], artifact_dir: Path
-) -> None:
+def test_e2_resume_returns_payload(harness: subprocess.Popen[bytes], artifact_dir: Path) -> None:
     """E2: Resume → checkpoint is restored, Command(resume=...) returns
     the resume_payload to the interrupt() call site.
 
     Business outcome: After sending resume, the result subtype is 'success',
     and the agent consumed the resume value.
     """
-    session_id, frames = initialize_and_assert_interrupt(
-        harness, AGENT_GATE, artifact_dir
-    )
+    session_id, frames = initialize_and_assert_interrupt(harness, AGENT_GATE, artifact_dir)
 
     before_count = count_checkpoints(session_id)
     assert before_count >= 1
 
-    send(harness, {
-        "type": "control_request",
-        "request_id": "req_resume",
-        "request": {
-            "subtype": "initialize",
-            "session_id": session_id,
-            "agent_definition": AGENT_GATE,
-            "input_payload": dict(_INPUT_PAYLOAD),
-            "resume_payload": {"decisions": [{"type": "approve"}]},
+    send(
+        harness,
+        {
+            "type": "control_request",
+            "request_id": "req_resume",
+            "request": {
+                "subtype": "initialize",
+                "session_id": session_id,
+                "agent_definition": AGENT_GATE,
+                "input_payload": dict(_INPUT_PAYLOAD),
+                "resume_payload": {"decisions": [{"type": "approve"}]},
+            },
         },
-    })
+    )
     resume_frames = read_turn_fast(harness)
 
     # drain trailing control_response (may or may not be present)
@@ -185,35 +178,34 @@ def test_e2_resume_returns_payload(
     )
 
 
-def test_e3_multi_turn_checkpoints(
-    harness: subprocess.Popen[bytes], artifact_dir: Path
-) -> None:
+def test_e3_multi_turn_checkpoints(harness: subprocess.Popen[bytes], artifact_dir: Path) -> None:
     """E3: Multiple turns with interrupts → each turn checkpoints
     and resumes independently via HumanInTheLoopMiddleware.
 
     Business outcome: Checkpoint count increases monotonically with each
     turn. Metadata step values confirm progress.
     """
-    session_id, turn1 = initialize_and_assert_interrupt(
-        harness, AGENT_GATE, artifact_dir
-    )
+    session_id, turn1 = initialize_and_assert_interrupt(harness, AGENT_GATE, artifact_dir)
 
     ids_1 = get_checkpoint_ids(session_id)
     count_1 = len(ids_1)
     assert count_1 >= 1
 
     # --- Turn 2: resume with approve → expect success ---
-    send(harness, {
-        "type": "control_request",
-        "request_id": "req_resume1",
-        "request": {
-            "subtype": "initialize",
-            "session_id": session_id,
-            "agent_definition": AGENT_GATE,
-            "input_payload": dict(_INPUT_PAYLOAD),
-            "resume_payload": {"decisions": [{"type": "approve"}]},
+    send(
+        harness,
+        {
+            "type": "control_request",
+            "request_id": "req_resume1",
+            "request": {
+                "subtype": "initialize",
+                "session_id": session_id,
+                "agent_definition": AGENT_GATE,
+                "input_payload": dict(_INPUT_PAYLOAD),
+                "resume_payload": {"decisions": [{"type": "approve"}]},
+            },
         },
-    })
+    )
     turn2 = read_turn(harness)
     r2 = turn2[-1]
     assert r2["type"] == "result"
@@ -229,9 +221,7 @@ def test_e3_multi_turn_checkpoints(
     all_frames = turn1 + turn2
     save_artifacts(artifact_dir, all_frames)
 
-    assert r2["subtype"] == "success", (
-        f"Expected success after single resume, got {r2['subtype']}"
-    )
+    assert r2["subtype"] == "success", f"Expected success after single resume, got {r2['subtype']}"
 
     metadata = get_checkpoint_metadata(session_id)
     assert metadata is not None

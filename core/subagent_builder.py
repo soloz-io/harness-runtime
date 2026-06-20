@@ -31,11 +31,13 @@ try:
     from langchain.agents import create_agent
 
     from core.state_schema_builder import create_state_schema_from_config
+
     DEEPAGENTS_AVAILABLE = True
 except ImportError:
     # Fallback to LangGraph's create_react_agent if deepagents not available
     DEEPAGENTS_AVAILABLE = False
     import warnings
+
     warnings.warn(
         "deepagents package not available. Using fallback create_react_agent. "
         "Install deepagents for full deep agent support.",
@@ -50,12 +52,12 @@ logger = structlog.get_logger(__name__)
 
 class SubAgentCompilationError(Exception):
     """Raised when sub-agent compilation fails."""
+
     pass
 
 
 def build_subagent(
-    specialist_config: Dict[str, Any],
-    available_tools: Dict[str, BaseTool]
+    specialist_config: Dict[str, Any], available_tools: Dict[str, BaseTool]
 ) -> Any:  # Returns SubAgent dict or CompiledSubAgent
     """
     Compile a sub-agent from specialist configuration.
@@ -95,9 +97,7 @@ def build_subagent(
 
     try:
         logger.info(
-            "building_subagent",
-            agent_name=agent_name,
-            using_deepagents=DEEPAGENTS_AVAILABLE
+            "building_subagent", agent_name=agent_name, using_deepagents=DEEPAGENTS_AVAILABLE
         )
 
         # Extract model configuration
@@ -121,27 +121,24 @@ def build_subagent(
                     "tool_not_found_for_subagent",
                     agent_name=agent_name,
                     tool_name=tool_name,
-                    available_tools=list(available_tools.keys())
+                    available_tools=list(available_tools.keys()),
                 )
 
         if not filtered_tools:
             logger.warning(
-                "subagent_has_no_tools",
-                agent_name=agent_name,
-                requested_tools=tool_names
+                "subagent_has_no_tools", agent_name=agent_name, requested_tools=tool_names
             )
 
         # Get system prompt
         system_prompt = specialist_config.get("system_prompt", "")
         if not system_prompt:
-            logger.warning(
-                "subagent_missing_system_prompt",
-                agent_name=agent_name
-            )
+            logger.warning("subagent_missing_system_prompt", agent_name=agent_name)
 
         # Extract brief description
-        brief_description = specialist_config.get("description",
-            system_prompt[:200] + "..." if len(system_prompt) > 200 else system_prompt)
+        brief_description = specialist_config.get(
+            "description",
+            system_prompt[:200] + "..." if len(system_prompt) > 200 else system_prompt,
+        )
 
         # Extract response_format (ToolStrategy schema dict or raw dict)
         response_format = specialist_config.get("response_format")
@@ -158,20 +155,29 @@ def build_subagent(
         # Check if state_schema or rubric is defined
         has_state_schema = "state_schema" in specialist_config
         has_rubric = "rubric" in specialist_config
-        
+
         if (has_state_schema or has_rubric) and DEEPAGENTS_AVAILABLE:
             # PATH A: Create CompiledSubAgent with custom state schema / rubric
             return _build_compiled_subagent(
-                agent_name, model_identifier, system_prompt, 
-                filtered_tools, specialist_config, brief_description, response_format
+                agent_name,
+                model_identifier,
+                system_prompt,
+                filtered_tools,
+                specialist_config,
+                brief_description,
+                response_format,
             )
         else:
             # PATH B: Return SubAgent dict (let SubAgentMiddleware handle it)
             # NOTE(v2): SubAgent dict path — interrupt_on is inherited from
             #            create_deep_agent's top-level interrupt_on parameter.
             return _build_subagent_dict(
-                agent_name, model_identifier, system_prompt,
-                filtered_tools, brief_description, response_format
+                agent_name,
+                model_identifier,
+                system_prompt,
+                filtered_tools,
+                brief_description,
+                response_format,
             )
 
     except Exception as e:
@@ -179,12 +185,9 @@ def build_subagent(
             "subagent_compilation_failed",
             agent_name=agent_name,
             error=str(e),
-            error_type=type(e).__name__
+            error_type=type(e).__name__,
         )
-        raise SubAgentCompilationError(
-            f"Failed to compile sub-agent '{agent_name}': {e}"
-        ) from e
-
+        raise SubAgentCompilationError(f"Failed to compile sub-agent '{agent_name}': {e}") from e
 
 
 def _build_compiled_subagent(
@@ -194,10 +197,10 @@ def _build_compiled_subagent(
     filtered_tools: List[BaseTool],
     specialist_config: Dict[str, Any],
     brief_description: str,
-    response_format: Any = None
+    response_format: Any = None,
 ) -> Any:  # Returns CompiledSubAgent
     """Build CompiledSubAgent with optional state schema and filesystem middleware."""
-    
+
     # Create state schema from config if provided
     state_schema_config = specialist_config.get("state_schema")
     if state_schema_config:
@@ -205,18 +208,14 @@ def _build_compiled_subagent(
         logger.info(
             "building_compiled_subagent",
             agent_name=agent_name,
-            state_fields=list(state_schema_config.keys())
+            state_fields=list(state_schema_config.keys()),
         )
     else:
         state_schema_class = None
-        logger.info(
-            "building_compiled_subagent",
-            agent_name=agent_name,
-            state_fields=[]
-        )
+        logger.info("building_compiled_subagent", agent_name=agent_name, state_fields=[])
 
     middleware_stack = []
-    
+
     # Prepend rubric middleware if configured
     rubric_config = specialist_config.get("rubric")
     if rubric_config:
@@ -224,14 +223,18 @@ def _build_compiled_subagent(
         # We pass the model_identifier string directly, and RubricMiddleware will lazily initialize or complain
         rubric_middlewares = build_rubric_middlewares(rubric_config, model_identifier)
         middleware_stack.extend(rubric_middlewares)
-        
-    middleware_stack.extend([
-        FilesystemMiddleware(),  # type: ignore
-        PatchToolCallsMiddleware()  # type: ignore
-    ])
+
+    middleware_stack.extend(
+        [
+            FilesystemMiddleware(),  # type: ignore
+            PatchToolCallsMiddleware(),  # type: ignore
+        ]
+    )
     if specialist_config.get("interrupt_on"):
-        middleware_stack.append(HumanInTheLoopMiddleware(interrupt_on=specialist_config["interrupt_on"]))
-    
+        middleware_stack.append(
+            HumanInTheLoopMiddleware(interrupt_on=specialist_config["interrupt_on"])
+        )
+
     create_agent_kwargs: dict[str, Any] = {
         "model": model_identifier,
         "system_prompt": system_prompt,
@@ -259,7 +262,7 @@ def _build_compiled_subagent(
         tool_count=len(filtered_tools),
         tool_names=[getattr(t, "name", str(t)) for t in filtered_tools],
         has_state_schema=bool(state_schema_config),
-        return_type="CompiledSubAgent"
+        return_type="CompiledSubAgent",
     )
 
     return compiled_subagent
@@ -298,7 +301,7 @@ def _build_subagent_dict(
         tool_count=len(filtered_tools),
         tool_names=[getattr(t, "name", str(t)) for t in filtered_tools],
         has_state_schema=False,
-        return_type="SubAgent_dict"
+        return_type="SubAgent_dict",
     )
 
     return subagent_dict

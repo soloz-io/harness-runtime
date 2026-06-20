@@ -42,8 +42,12 @@ async def load_mcp_tools_from_servers(
         from langchain_mcp_adapters.sessions import StdioConnection, create_session
         from langchain_mcp_adapters.tools import convert_mcp_tool_to_langchain_tool
     except ImportError as e:
-        logger.error("langchain_mcp_adapters not installed. Install with: pip install langchain-mcp-adapters")
-        raise MCPLoaderError("langchain-mcp-adapters package is required for MCP tool loading") from e
+        logger.error(
+            "langchain_mcp_adapters not installed. Install with: pip install langchain-mcp-adapters"
+        )
+        raise MCPLoaderError(
+            "langchain-mcp-adapters package is required for MCP tool loading"
+        ) from e
 
     tools: dict[str, BaseTool] = {}
     handles: list[MCPServerHandle] = []

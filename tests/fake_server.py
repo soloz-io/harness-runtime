@@ -25,10 +25,12 @@ def _write(obj: dict[str, Any]) -> None:
 
 
 def _control_success(request_id: Any, **extra: Any) -> None:
-    _write({
-        "type": "control_response",
-        "response": {"request_id": request_id, "subtype": "success", **extra},
-    })
+    _write(
+        {
+            "type": "control_response",
+            "response": {"request_id": request_id, "subtype": "success", **extra},
+        }
+    )
 
 
 def _content_to_text(content: Any) -> str:
@@ -46,33 +48,55 @@ def _content_to_text(content: Any) -> str:
 def _run_turn(content: Any, session_id: str) -> None:
     prompt = _content_to_text(content)
 
-    _write({
-        "type": "system", "subtype": "init",
-        "session_id": session_id, "model": "gpt-4-fake",
-        "tools": [],
-    })
+    _write(
+        {
+            "type": "system",
+            "subtype": "init",
+            "session_id": session_id,
+            "model": "gpt-4-fake",
+            "tools": [],
+        }
+    )
 
     for char in prompt:
-        _write({
-            "type": "stream_event", "session_id": session_id,
-            "event": {
-                "type": "content_block_delta", "index": 0,
-                "delta": {"type": "text_delta", "text": char},
+        _write(
+            {
+                "type": "stream_event",
+                "session_id": session_id,
+                "event": {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "text_delta", "text": char},
+                },
+            }
+        )
+
+    _write(
+        {
+            "type": "assistant",
+            "message": {
+                "model": "gpt-4-fake",
+                "content": [{"type": "text", "text": f"echo: {prompt}"}],
             },
-        })
+            "parent_tool_use_id": None,
+            "session_id": session_id,
+        }
+    )
 
-    _write({
-        "type": "assistant",
-        "message": {"model": "gpt-4-fake", "content": [{"type": "text", "text": f"echo: {prompt}"}]},
-        "parent_tool_use_id": None, "session_id": session_id,
-    })
-
-    _write({
-        "type": "result", "subtype": "success",
-        "session_id": session_id, "duration_ms": 1, "duration_api_ms": 1,
-        "is_error": False, "num_turns": 1, "total_cost_usd": 0.0, "usage": {},
-        "result": f"echo: {prompt}",
-    })
+    _write(
+        {
+            "type": "result",
+            "subtype": "success",
+            "session_id": session_id,
+            "duration_ms": 1,
+            "duration_api_ms": 1,
+            "is_error": False,
+            "num_turns": 1,
+            "total_cost_usd": 0.0,
+            "usage": {},
+            "result": f"echo: {prompt}",
+        }
+    )
 
 
 def main() -> None:

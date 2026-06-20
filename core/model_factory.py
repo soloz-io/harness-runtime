@@ -40,12 +40,15 @@ def _resolve_openai_base_url(model_name: str, extra_kwargs: dict[str, Any]) -> s
     return None
 
 
-def _create_model_for_provider(provider: str, model_name: str, api_key: str, **extra_kwargs: Any) -> Any:
+def _create_model_for_provider(
+    provider: str, model_name: str, api_key: str, **extra_kwargs: Any
+) -> Any:
     """Create the appropriate LLM model based on provider and model name."""
     kwargs: dict[str, Any] = {"model": model_name, "api_key": api_key, **extra_kwargs}
 
     if provider == "anthropic":
         from langchain_anthropic import ChatAnthropic
+
         return ChatAnthropic(**kwargs)
     if provider == "openai":
         base_url = _resolve_openai_base_url(model_name, extra_kwargs)
@@ -53,6 +56,7 @@ def _create_model_for_provider(provider: str, model_name: str, api_key: str, **e
             kwargs["base_url"] = base_url
             kwargs["use_responses_api"] = False
         from langchain_openai import ChatOpenAI
+
         return ChatOpenAI(**kwargs)
     raise ValueError(f"Unsupported provider: {provider}")
 
@@ -106,18 +110,18 @@ class ModelFactory:
         prov = os.environ.get("LLM_PROVIDER") or _detect_provider(model)
 
         if model.startswith("deepseek"):
-            api_key = (os.environ.get("DEEPSEEK_API_KEY")
-                       or os.environ.get("OPENAI_API_KEY"))
+            api_key = os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("OPENAI_API_KEY")
             if "extra_body" not in extra_kwargs:
                 extra_kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
         else:
-            api_key = (os.environ.get("OPENAI_API_KEY")
-                       or os.environ.get("DEEPSEEK_API_KEY")
-                       or os.environ.get("ANTHROPIC_API_KEY"))
+            api_key = (
+                os.environ.get("OPENAI_API_KEY")
+                or os.environ.get("DEEPSEEK_API_KEY")
+                or os.environ.get("ANTHROPIC_API_KEY")
+            )
         if not api_key:
             raise ValueError(
-                "No API key found. Set OPENAI_API_KEY, DEEPSEEK_API_KEY, "
-                "or ANTHROPIC_API_KEY"
+                "No API key found. Set OPENAI_API_KEY, DEEPSEEK_API_KEY, or ANTHROPIC_API_KEY"
             )
 
         return _create_model_for_provider(prov, model, api_key=api_key, **extra_kwargs)

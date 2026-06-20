@@ -47,9 +47,7 @@ def create_state_schema_from_config(schema_config: Dict[str, Any]) -> type:
         >>> # StateClass now has: proposed_changes: Annotated[List[Dict[str, Any]], add_messages]
     """
     logger.info(
-        "creating_state_schema",
-        field_count=len(schema_config),
-        fields=list(schema_config.keys())
+        "creating_state_schema", field_count=len(schema_config), fields=list(schema_config.keys())
     )
 
     # Build annotations dictionary
@@ -90,20 +88,14 @@ def create_state_schema_from_config(schema_config: Dict[str, Any]) -> type:
             "field_annotation_created",
             field_name=field_name,
             field_type=field_type,
-            has_reducer=bool(reducer)
+            has_reducer=bool(reducer),
         )
 
     # Create dynamic class inheriting from AgentState
-    DynamicState = type(
-        "DynamicAgentState",
-        (AgentState,),
-        {"__annotations__": annotations}
-    )
+    DynamicState = type("DynamicAgentState", (AgentState,), {"__annotations__": annotations})
 
     logger.info(
-        "state_schema_created",
-        class_name="DynamicAgentState",
-        field_count=len(annotations)
+        "state_schema_created", class_name="DynamicAgentState", field_count=len(annotations)
     )
 
     return DynamicState

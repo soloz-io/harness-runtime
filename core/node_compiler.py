@@ -42,6 +42,7 @@ def build_node_middleware(
         middleware.append(HumanInTheLoopMiddleware(interrupt_on=interrupt_on_config))
     if response_format:
         from core.structured_output import StructuredOutputMappingMiddleware  # noqa: PLC0415
+
         middleware.append(StructuredOutputMappingMiddleware())
     return middleware
 

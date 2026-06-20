@@ -115,7 +115,10 @@ class TestThinkingModeCapabilities:
             result = model.invoke(messages, tools=[_dummy_weather], response_format=strategy)
             print(f"  SUCCESS — model accepts thinking + tool_choice")
             print(f"  response: {result.content!r}")
-            assert any(tc["name"] == "extract_weather" or "extract" in tc["name"] for tc in (result.tool_calls or []))
+            assert any(
+                tc["name"] == "extract_weather" or "extract" in tc["name"]
+                for tc in (result.tool_calls or [])
+            )
         except Exception as e:
             err_str = str(e)
             if "tool_choice" in err_str.lower() or "thinking mode" in err_str.lower():
@@ -204,11 +207,13 @@ class TestThinkingModeCapabilities:
         print(f"  Turn 1 reasoning_content={'present' if rc1 else 'absent'}")
 
         # Add a fake tool result to simulate tool execution
-        messages.append({
-            "role": "tool",
-            "tool_call_id": result_t.tool_calls[0]["id"] if result_t.tool_calls else "call_1",
-            "content": "Sunny 22°C",
-        })
+        messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": result_t.tool_calls[0]["id"] if result_t.tool_calls else "call_1",
+                "content": "Sunny 22°C",
+            }
+        )
 
         # --- Turn 2: thinking-enabled call ---
         messages.append(HumanMessage(content="Now convert to Celsius"))
@@ -218,11 +223,13 @@ class TestThinkingModeCapabilities:
         print(f"  Turn 2 reasoning_content={'present' if rc2 else 'absent'}")
 
         # Add tool result
-        messages.append({
-            "role": "tool",
-            "tool_call_id": result_t2.tool_calls[0]["id"] if result_t2.tool_calls else "call_2",
-            "content": "22°C = 71.6°F",
-        })
+        messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": result_t2.tool_calls[0]["id"] if result_t2.tool_calls else "call_2",
+                "content": "22°C = 71.6°F",
+            }
+        )
 
         # --- Turn 3: thinking-disabled call with tool_choice (reviewer scenario) ---
         model_nt = _make_model(thinking_disabled=True)

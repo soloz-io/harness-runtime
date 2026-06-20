@@ -20,9 +20,7 @@ MOCK_DATA = Path(__file__).parent / "mock" / "simple-bug-fix-invoke-requests.jso
 TIMEOUT = 15
 
 
-def _run_server() -> (
-    tuple[subprocess.Popen[bytes], list[dict[str, Any]]]
-):
+def _run_server() -> tuple[subprocess.Popen[bytes], list[dict[str, Any]]]:
     proc = subprocess.Popen(
         [sys.executable, str(FAKE_SERVER)],
         stdin=subprocess.PIPE,
@@ -67,15 +65,18 @@ def test_initialize_returns_session_id() -> None:
 
     proc, _ = _run_server()
     try:
-        _send(proc, {
-            "type": "control_request",
-            "request_id": "req_1",
-            "request": {
-                "subtype": "initialize",
-                "agent_definition": step["agent_definition"],
-                "input_payload": step["input_payload"],
+        _send(
+            proc,
+            {
+                "type": "control_request",
+                "request_id": "req_1",
+                "request": {
+                    "subtype": "initialize",
+                    "agent_definition": step["agent_definition"],
+                    "input_payload": step["input_payload"],
+                },
             },
-        })
+        )
 
         resp = _read_frame(proc)
         assert resp["type"] == "control_response"
@@ -96,24 +97,30 @@ def test_full_turn_lifecycle() -> None:
 
     proc, _ = _run_server()
     try:
-        _send(proc, {
-            "type": "control_request",
-            "request_id": "req_1",
-            "request": {
-                "subtype": "initialize",
-                "agent_definition": step["agent_definition"],
-                "input_payload": step["input_payload"],
+        _send(
+            proc,
+            {
+                "type": "control_request",
+                "request_id": "req_1",
+                "request": {
+                    "subtype": "initialize",
+                    "agent_definition": step["agent_definition"],
+                    "input_payload": step["input_payload"],
+                },
             },
-        })
+        )
         init_resp = _read_frame(proc)
         assert init_resp["type"] == "control_response"
 
-        _send(proc, {
-            "type": "user",
-            "message": {"role": "user", "content": user_content},
-            "session_id": None,
-            "parent_tool_use_id": None,
-        })
+        _send(
+            proc,
+            {
+                "type": "user",
+                "message": {"role": "user", "content": user_content},
+                "session_id": None,
+                "parent_tool_use_id": None,
+            },
+        )
 
         frames = _read_turn(proc)
 
@@ -129,11 +136,7 @@ def test_full_turn_lifecycle() -> None:
 
         assistant_frames = [f for f in frames if f["type"] == "assistant"]
         assert len(assistant_frames) >= 1
-        assert any(
-            b["type"] == "text"
-            for af in assistant_frames
-            for b in af["message"]["content"]
-        )
+        assert any(b["type"] == "text" for af in assistant_frames for b in af["message"]["content"])
 
         assert frames[-1]["type"] == "result"
         assert frames[-1]["subtype"] == "success"
@@ -152,26 +155,32 @@ def test_multi_turn_in_same_session() -> None:
 
     proc, _ = _run_server()
     try:
-        _send(proc, {
-            "type": "control_request",
-            "request_id": "req_1",
-            "request": {
-                "subtype": "initialize",
-                "agent_definition": steps[0]["agent_definition"],
-                "input_payload": steps[0]["input_payload"],
+        _send(
+            proc,
+            {
+                "type": "control_request",
+                "request_id": "req_1",
+                "request": {
+                    "subtype": "initialize",
+                    "agent_definition": steps[0]["agent_definition"],
+                    "input_payload": steps[0]["input_payload"],
+                },
             },
-        })
+        )
         init_resp = _read_frame(proc)
         session_id = init_resp["response"]["session_id"]
 
         for step in steps:
             content = step["input_payload"]["messages"][0]["content"]
-            _send(proc, {
-                "type": "user",
-                "message": {"role": "user", "content": content},
-                "session_id": session_id,
-                "parent_tool_use_id": None,
-            })
+            _send(
+                proc,
+                {
+                    "type": "user",
+                    "message": {"role": "user", "content": content},
+                    "session_id": session_id,
+                    "parent_tool_use_id": None,
+                },
+            )
             frames = _read_turn(proc)
             assert frames[-1]["type"] == "result"
             assert frames[-1]["session_id"] == session_id
@@ -189,25 +198,31 @@ def test_all_mock_data_steps_round_trip() -> None:
     proc, _ = _run_server()
     try:
         for i, step in enumerate(steps):
-            _send(proc, {
-                "type": "control_request",
-                "request_id": f"req_{i}",
-                "request": {
-                    "subtype": "initialize",
-                    "agent_definition": step["agent_definition"],
-                    "input_payload": step["input_payload"],
+            _send(
+                proc,
+                {
+                    "type": "control_request",
+                    "request_id": f"req_{i}",
+                    "request": {
+                        "subtype": "initialize",
+                        "agent_definition": step["agent_definition"],
+                        "input_payload": step["input_payload"],
+                    },
                 },
-            })
+            )
             init_resp = _read_frame(proc)
             assert init_resp["response"]["subtype"] == "success"
 
             content = step["input_payload"]["messages"][0]["content"]
-            _send(proc, {
-                "type": "user",
-                "message": {"role": "user", "content": content},
-                "session_id": init_resp["response"]["session_id"],
-                "parent_tool_use_id": None,
-            })
+            _send(
+                proc,
+                {
+                    "type": "user",
+                    "message": {"role": "user", "content": content},
+                    "session_id": init_resp["response"]["session_id"],
+                    "parent_tool_use_id": None,
+                },
+            )
 
             frames = _read_turn(proc)
             assert frames[-1]["type"] == "result"
@@ -221,11 +236,14 @@ def test_interrupt_acknowledged() -> None:
     """control_request {interrupt} → control_response {success}."""
     proc, _ = _run_server()
     try:
-        _send(proc, {
-            "type": "control_request",
-            "request_id": "req_interrupt",
-            "request": {"subtype": "interrupt"},
-        })
+        _send(
+            proc,
+            {
+                "type": "control_request",
+                "request_id": "req_interrupt",
+                "request": {"subtype": "interrupt"},
+            },
+        )
         resp = _read_frame(proc)
         assert resp["type"] == "control_response"
         assert resp["response"]["subtype"] == "success"

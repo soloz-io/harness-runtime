@@ -56,4 +56,3 @@ def artifact_dir(_create_run_dir: Path, request: pytest.FixtureRequest) -> Path:
     test_dir = _create_run_dir / test_name
     test_dir.mkdir(exist_ok=True)
     return test_dir
-

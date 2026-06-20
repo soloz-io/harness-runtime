@@ -88,9 +88,7 @@ GATE_ENABLED: dict[str, Any] = {
                 "name": "hitl-gate-enabled",
                 "model": dict(_MODEL),
                 "tools": ["hitl_gate"],
-                "interrupt_on": {
-                    "hitl_gate": {"allowed_decisions": ["approve", "reject"]}
-                },
+                "interrupt_on": {"hitl_gate": {"allowed_decisions": ["approve", "reject"]}},
                 "system_prompt": (
                     "You MUST call the hitl_gate tool with response 'blue'. "
                     "Do not respond with any text. Only call hitl_gate."
@@ -130,9 +128,7 @@ GATE_MULTI: dict[str, Any] = {
                 "name": "hitl-gate-multi",
                 "model": dict(_MODEL),
                 "tools": ["hitl_gate"],
-                "interrupt_on": {
-                    "hitl_gate": {"allowed_decisions": ["approve", "reject"]}
-                },
+                "interrupt_on": {"hitl_gate": {"allowed_decisions": ["approve", "reject"]}},
                 "system_prompt": (
                     "CRITICAL: You must call hitl_gate now with response 'first'. "
                     "After you get the result, call hitl_gate again with response 'second'. "
@@ -153,35 +149,39 @@ _INPUT_PAYLOAD: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 
 
-def test_hitl_gate_delivers_interrupt(
-    harness: subprocess.Popen[bytes], artifact_dir: Path
-) -> None:
+def test_hitl_gate_delivers_interrupt(harness: subprocess.Popen[bytes], artifact_dir: Path) -> None:
     """H1 + H2: Agent with interrupt_on emits result {subtype:"interrupted"}.
 
     Business outcome: SDK receives HITLRequest with action_requests and
     review_configs it can render.
     """
-    send(harness, {
-        "type": "control_request",
-        "request_id": "req_1",
-        "request": {
-            "subtype": "initialize",
-            "agent_definition": GATE_ENABLED,
-            "input_payload": dict(_INPUT_PAYLOAD),
+    send(
+        harness,
+        {
+            "type": "control_request",
+            "request_id": "req_1",
+            "request": {
+                "subtype": "initialize",
+                "agent_definition": GATE_ENABLED,
+                "input_payload": dict(_INPUT_PAYLOAD),
+            },
         },
-    })
+    )
     init = read_frame(harness)
     assert init["type"] == "control_response"
     assert init["response"]["subtype"] == "success"
     session_id: str = init["response"]["session_id"]
     assert len(session_id) > 0
 
-    send(harness, {
-        "type": "user",
-        "message": {"role": "user", "content": "I need help deciding."},
-        "session_id": None,
-        "parent_tool_use_id": None,
-    })
+    send(
+        harness,
+        {
+            "type": "user",
+            "message": {"role": "user", "content": "I need help deciding."},
+            "session_id": None,
+            "parent_tool_use_id": None,
+        },
+    )
     frames = read_turn(harness)
     save_artifacts(artifact_dir, frames)
 
@@ -208,32 +208,36 @@ def test_hitl_gate_delivers_interrupt(
         assert len(cfg["allowed_decisions"]) > 0
 
 
-def test_hitl_not_configured(
-    harness: subprocess.Popen[bytes], artifact_dir: Path
-) -> None:
+def test_hitl_not_configured(harness: subprocess.Popen[bytes], artifact_dir: Path) -> None:
     """H3: Without interrupt_on in node config, agent completes normally.
 
     Business outcome: No interrupt emitted, result is success.
     """
-    send(harness, {
-        "type": "control_request",
-        "request_id": "req_1",
-        "request": {
-            "subtype": "initialize",
-            "agent_definition": GATE_DISABLED,
-            "input_payload": dict(_INPUT_PAYLOAD),
+    send(
+        harness,
+        {
+            "type": "control_request",
+            "request_id": "req_1",
+            "request": {
+                "subtype": "initialize",
+                "agent_definition": GATE_DISABLED,
+                "input_payload": dict(_INPUT_PAYLOAD),
+            },
         },
-    })
+    )
     init = read_frame(harness)
     assert init["type"] == "control_response"
     assert init["response"]["subtype"] == "success"
 
-    send(harness, {
-        "type": "user",
-        "message": {"role": "user", "content": "Say hello."},
-        "session_id": None,
-        "parent_tool_use_id": None,
-    })
+    send(
+        harness,
+        {
+            "type": "user",
+            "message": {"role": "user", "content": "Say hello."},
+            "session_id": None,
+            "parent_tool_use_id": None,
+        },
+    )
     frames = read_turn(harness)
     save_artifacts(artifact_dir, frames)
 
@@ -243,24 +247,25 @@ def test_hitl_not_configured(
     assert result.get("interrupt") is None
 
 
-def test_hitl_multi_interrupt(
-    harness: subprocess.Popen[bytes], artifact_dir: Path
-) -> None:
+def test_hitl_multi_interrupt(harness: subprocess.Popen[bytes], artifact_dir: Path) -> None:
     """H4: Multiple consecutive gate tool calls in one turn.
 
     Business outcome: Each gate tool call delivers its own interrupt,
     and the caller can process both in sequence.
     """
     # --- Turn 1: initialize ---
-    send(harness, {
-        "type": "control_request",
-        "request_id": "req_1",
-        "request": {
-            "subtype": "initialize",
-            "agent_definition": GATE_MULTI,
-            "input_payload": dict(_INPUT_PAYLOAD),
+    send(
+        harness,
+        {
+            "type": "control_request",
+            "request_id": "req_1",
+            "request": {
+                "subtype": "initialize",
+                "agent_definition": GATE_MULTI,
+                "input_payload": dict(_INPUT_PAYLOAD),
+            },
         },
-    })
+    )
     init = read_frame(harness)
     assert init["type"] == "control_response"
     assert init["response"]["subtype"] == "success"
@@ -268,12 +273,15 @@ def test_hitl_multi_interrupt(
     assert len(session_id) > 0
 
     # --- Turn 2: user message -> expect first interrupt ---
-    send(harness, {
-        "type": "user",
-        "message": {"role": "user", "content": "I need help deciding."},
-        "session_id": None,
-        "parent_tool_use_id": None,
-    })
+    send(
+        harness,
+        {
+            "type": "user",
+            "message": {"role": "user", "content": "I need help deciding."},
+            "session_id": None,
+            "parent_tool_use_id": None,
+        },
+    )
     frames_1 = read_turn(harness)
     result_1 = frames_1[-1]
     assert result_1["type"] == "result"
@@ -282,17 +290,20 @@ def test_hitl_multi_interrupt(
     assert len(result_1["interrupt"]["action_requests"]) > 0
 
     # --- Turn 3: resume with approve -> expect second interrupt ---
-    send(harness, {
-        "type": "control_request",
-        "request_id": "req_2",
-        "request": {
-            "subtype": "initialize",
-            "session_id": session_id,
-            "agent_definition": GATE_MULTI,
-            "input_payload": dict(_INPUT_PAYLOAD),
-            "resume_payload": {"decisions": [{"type": "approve"}]},
+    send(
+        harness,
+        {
+            "type": "control_request",
+            "request_id": "req_2",
+            "request": {
+                "subtype": "initialize",
+                "session_id": session_id,
+                "agent_definition": GATE_MULTI,
+                "input_payload": dict(_INPUT_PAYLOAD),
+                "resume_payload": {"decisions": [{"type": "approve"}]},
+            },
         },
-    })
+    )
     frames_2 = read_turn(harness)
     result_2 = frames_2[-1]
     assert result_2["type"] == "result"
@@ -309,17 +320,20 @@ def test_hitl_multi_interrupt(
     assert ctrl_2["response"]["subtype"] == "success"
 
     # --- Turn 4: resume with approve -> expect success ---
-    send(harness, {
-        "type": "control_request",
-        "request_id": "req_3",
-        "request": {
-            "subtype": "initialize",
-            "session_id": session_id,
-            "agent_definition": GATE_MULTI,
-            "input_payload": dict(_INPUT_PAYLOAD),
-            "resume_payload": {"decisions": [{"type": "approve"}]},
+    send(
+        harness,
+        {
+            "type": "control_request",
+            "request_id": "req_3",
+            "request": {
+                "subtype": "initialize",
+                "session_id": session_id,
+                "agent_definition": GATE_MULTI,
+                "input_payload": dict(_INPUT_PAYLOAD),
+                "resume_payload": {"decisions": [{"type": "approve"}]},
+            },
         },
-    })
+    )
     frames_3 = read_turn(harness)
     result_3 = frames_3[-1]
     assert result_3["type"] == "result"

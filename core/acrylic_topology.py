@@ -44,7 +44,7 @@ class AcrylicTopologyBuilder(TopologyBuilder):
         # 1. Capture initial messages
         def _capture_initial(state: dict[str, Any]) -> dict[str, Any]:
             return {"__initial_messages": list(state.get("messages", []))}
-        
+
         init_id = "__init_messages__"
         graph.add_node(init_id, _capture_initial)
         graph.set_entry_point(init_id)
@@ -158,13 +158,14 @@ class AcrylicTopologyBuilder(TopologyBuilder):
             def _make_increment_budget() -> Any:
                 def increment_budget_node(state: dict[str, Any]) -> dict[str, Any]:
                     return {"retry_count": state.get("retry_count", 0) + 1}
+
                 return increment_budget_node
 
             graph.add_node(budget_node_name, _make_increment_budget())
             graph.add_edge(budget_node_name, self._prep_target(target))
             added_budget_nodes.add(budget_node_name)
             logger.info("custom_graph_budget_node_added", name=budget_node_name, target=target)
-        
+
         return added_budget_nodes
 
     def _wire_conditional_edges(self, graph: StateGraph, edges: List[Dict[str, Any]]) -> None:
@@ -180,7 +181,9 @@ class AcrylicTopologyBuilder(TopologyBuilder):
                     cond_str = c["condition"]
                     target = c["target"]
                     inc = c.get("increment", False) or "retry_count" in cond_str
-                    entries.append((cond_str, self._prep_target(target), f"__increment_budget_{target}__", inc))
+                    entries.append(
+                        (cond_str, self._prep_target(target), f"__increment_budget_{target}__", inc)
+                    )
                 default_target = self._prep_target(edge.get("default_target", "__end__"))
 
                 existing = conditional_groups.get(source)
@@ -194,7 +197,9 @@ class AcrylicTopologyBuilder(TopologyBuilder):
                 alt_target = self._prep_target(edge.get("alt_target", "__end__"))
                 condition = edge["condition"]
                 inc = "retry_count" in condition
-                entries = [(condition, self._prep_target(target), f"__increment_budget_{target}__", inc)]
+                entries = [
+                    (condition, self._prep_target(target), f"__increment_budget_{target}__", inc)
+                ]
 
                 existing = conditional_groups.get(source)
                 if existing is not None:
@@ -219,7 +224,9 @@ class AcrylicTopologyBuilder(TopologyBuilder):
             graph.add_edge(source, target)
             logger.info("custom_graph_edge", source=source, target=target)
 
-    def _create_combined_edge_router(self, conditions: list[tuple[str, str, str, bool]], default_target: str) -> Any:
+    def _create_combined_edge_router(
+        self, conditions: list[tuple[str, str, str, bool]], default_target: str
+    ) -> Any:
         def router(state: dict[str, Any]) -> str:
             for condition_str, target, inc_target, should_increment in conditions:
                 try:

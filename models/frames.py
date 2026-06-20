@@ -3,6 +3,7 @@ from typing import Any, Optional
 
 # -- Content Blocks --
 
+
 @dataclass
 class TextBlock:
     type: str = "text"
@@ -37,6 +38,7 @@ ContentBlock = TextBlock | ThinkingBlock | ToolUseBlock | ToolResultBlock
 
 # -- Incoming Frames (SDK -> Server) --
 
+
 @dataclass
 class ControlRequest:
     type: str = "control_request"
@@ -61,6 +63,7 @@ IncomingFrame = ControlRequest | UserMessage
 
 # -- Outgoing Frames (Server -> SDK) --
 
+
 @dataclass
 class SystemInitFrame:
     type: str = "system"
@@ -79,8 +82,14 @@ class AssistantFrame:
     session_id: Optional[str] = None
 
     @classmethod
-    def build(cls, *, session_id: str, model: str, content: list[dict[str, Any]],
-              parent_tool_use_id: Optional[str] = None) -> "AssistantFrame":
+    def build(
+        cls,
+        *,
+        session_id: str,
+        model: str,
+        content: list[dict[str, Any]],
+        parent_tool_use_id: Optional[str] = None,
+    ) -> "AssistantFrame":
         return cls(
             message={"model": model, "content": content},
             parent_tool_use_id=parent_tool_use_id,
@@ -152,7 +161,14 @@ class ControlResponseFrame:
         return cls(response={"request_id": request_id, "subtype": "error", "error": error})
 
 
-OutgoingFrame = SystemInitFrame | AssistantFrame | UserEchoFrame | StreamEventFrame | ResultFrame | ControlResponseFrame
+OutgoingFrame = (
+    SystemInitFrame
+    | AssistantFrame
+    | UserEchoFrame
+    | StreamEventFrame
+    | ResultFrame
+    | ControlResponseFrame
+)
 
 
 def frame_to_dict(frame: OutgoingFrame) -> dict[str, Any]:

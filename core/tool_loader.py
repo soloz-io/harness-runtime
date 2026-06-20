@@ -28,12 +28,11 @@ logger = structlog.get_logger(__name__)
 
 class ToolLoadingError(Exception):
     """Raised when tool loading fails."""
+
     pass
 
 
-def load_tools_from_definition(
-    tool_definitions: List[Dict[str, Any]]
-) -> Dict[str, BaseTool]:
+def load_tools_from_definition(tool_definitions: List[Dict[str, Any]]) -> Dict[str, BaseTool]:
     """
     Dynamically load tools from script definitions.
 
@@ -94,17 +93,12 @@ def load_tools_from_definition(
 
         if not tool_script:
             logger.warning(
-                "tool_script_empty",
-                tool_name=tool_name,
-                has_runtime=bool(tool_def.get("runtime"))
+                "tool_script_empty", tool_name=tool_name, has_runtime=bool(tool_def.get("runtime"))
             )
             continue
 
         try:
-            logger.info(
-                "loading_tool",
-                tool_name=tool_name
-            )
+            logger.info("loading_tool", tool_name=tool_name)
 
             # Create isolated namespace for tool execution
             # Include common imports needed for tool creation
@@ -135,7 +129,7 @@ def load_tools_from_definition(
             logger.info(
                 "tool_loaded_successfully",
                 tool_name=tool_name,
-                tool_type=type(tool_instance).__name__
+                tool_type=type(tool_instance).__name__,
             )
 
         except Exception as e:
@@ -143,16 +137,10 @@ def load_tools_from_definition(
                 "tool_loading_failed",
                 tool_name=tool_name,
                 error=str(e),
-                error_type=type(e).__name__
+                error_type=type(e).__name__,
             )
-            raise ToolLoadingError(
-                f"Failed to load tool '{tool_name}': {e}"
-            ) from e
+            raise ToolLoadingError(f"Failed to load tool '{tool_name}': {e}") from e
 
-    logger.info(
-        "tools_loaded",
-        total_tools=len(loaded_tools),
-        tool_names=list(loaded_tools.keys())
-    )
+    logger.info("tools_loaded", total_tools=len(loaded_tools), tool_names=list(loaded_tools.keys()))
 
     return loaded_tools

@@ -11,9 +11,9 @@ import structlog
 from langchain_core.runnables import Runnable
 
 from core.interfaces import TopologyBuilder
+from core.rubric_middleware import build_rubric_middlewares
 from core.structured_output import build_tool_strategy, resolve_structured_output_model
 from core.subagent_builder import build_subagent
-from core.rubric_middleware import build_rubric_middlewares
 
 try:
     from deepagents import create_deep_agent
@@ -58,7 +58,7 @@ class StartTopologyBuilder(TopologyBuilder):
             "graph_structure_parsed",
             total_nodes=len(nodes),
             has_orchestrator=bool(orchestrator_config),
-            specialist_count=len(specialist_configs)
+            specialist_count=len(specialist_configs),
         )
 
         compiled_subagents: List[Any] = []
@@ -80,10 +80,9 @@ class StartTopologyBuilder(TopologyBuilder):
 
         orchestrator_model_config = orchestrator_actual_config.get("model", {})
         orchestrator_provider = orchestrator_model_config.get("provider", "openai")
-        orchestrator_model_name = (
-            orchestrator_model_config.get("model_name")
-            or orchestrator_model_config.get("model")
-        )
+        orchestrator_model_name = orchestrator_model_config.get(
+            "model_name"
+        ) or orchestrator_model_config.get("model")
         if not orchestrator_model_name:
             raise ValueError(
                 "Agent definition must specify a model "
@@ -107,7 +106,7 @@ class StartTopologyBuilder(TopologyBuilder):
                 logger.warning(
                     "orchestrator_tool_not_found",
                     tool_name=tool_name,
-                    available_tools=list(available_tools.keys())
+                    available_tools=list(available_tools.keys()),
                 )
 
         logger.info(
@@ -137,7 +136,7 @@ class StartTopologyBuilder(TopologyBuilder):
             "checkpointer": checkpointer,
             "debug": True,
         }
-        
+
         # Build middlewares starting with Rubric if configured
         middleware_stack = build_rubric_middlewares(rubric_config, deep_agent_kwargs["model"])
         if middleware_stack:
@@ -157,7 +156,7 @@ class StartTopologyBuilder(TopologyBuilder):
         logger.info(
             "create_deep_agent_result",
             runnable_type=type(main_runnable).__name__,
-            has_nodes=hasattr(main_runnable, 'nodes'),
+            has_nodes=hasattr(main_runnable, "nodes"),
         )
 
         logger.info(

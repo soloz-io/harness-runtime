@@ -49,6 +49,7 @@ def _compute_tools(agent_definition: dict[str, Any]) -> list[dict[str, Any]]:
 
     return tools
 
+
 logger = structlog.get_logger(__name__)
 
 
@@ -70,9 +71,7 @@ class ExecutionManager:
 
     def _setup_checkpointer(self) -> None:
         try:
-            ctx = PostgresSaver.from_conn_string(
-                self.postgres_connection_string
-            )
+            ctx = PostgresSaver.from_conn_string(self.postgres_connection_string)
             self._checkpointer_context = ctx
             self.checkpointer = ctx.__enter__()
             self.checkpointer.setup()
@@ -109,13 +108,12 @@ class ExecutionManager:
 
             if resume_payload is not None:
                 from langgraph.types import Command
+
                 stream_input: Any = Command(resume=resume_payload)
             else:
                 stream_input = input_payload
 
-            for event in graph.stream(
-                stream_input, config, stream_mode=["values", "messages"]
-            ):
+            for event in graph.stream(stream_input, config, stream_mode=["values", "messages"]):
                 if not isinstance(event, tuple) or len(event) != 2:
                     continue
 
@@ -136,11 +134,18 @@ class ExecutionManager:
                     if isinstance(data, dict):
                         interrupt_val = data.get("__interrupt__")
                         if interrupt_val is not None:
-                            logger.info("executor_interrupt_detected", interrupt_val_type=type(interrupt_val).__name__)
+                            logger.info(
+                                "executor_interrupt_detected",
+                                interrupt_val_type=type(interrupt_val).__name__,
+                            )
                             interrupt_payload = None
                             if isinstance(interrupt_val, (list, tuple)) and len(interrupt_val) > 0:
                                 raw = interrupt_val[0]
-                                logger.info("executor_interrupt_raw", raw_type=type(raw).__name__, raw=str(raw)[:500])
+                                logger.info(
+                                    "executor_interrupt_raw",
+                                    raw_type=type(raw).__name__,
+                                    raw=str(raw)[:500],
+                                )
                                 if hasattr(raw, "value"):
                                     interrupt_payload = raw.value
                                 elif isinstance(raw, dict):
@@ -167,7 +172,7 @@ class ExecutionManager:
                             return ""
                         msgs: list[Any] = data.get("messages", [])
                         if len(msgs) > len(final_messages):
-                            for msg in msgs[len(final_messages):]:
+                            for msg in msgs[len(final_messages) :]:
                                 msg_id = getattr(msg, "id", None) or str(id(msg))
                                 if msg_id not in published_message_ids:
                                     published_message_ids.add(msg_id)
@@ -182,12 +187,16 @@ class ExecutionManager:
                                                 if isinstance(b, dict):
                                                     blocks.append(b)
                                         for tc in _extract_tool_calls(msg):
-                                            blocks.append({
-                                                "type": "tool_use",
-                                                "id": tc.get("id", f"call_{uuid.uuid4().hex[:12]}"),
-                                                "name": tc.get("name", "unknown"),
-                                                "input": tc.get("args", tc.get("input", {})),
-                                            })
+                                            blocks.append(
+                                                {
+                                                    "type": "tool_use",
+                                                    "id": tc.get(
+                                                        "id", f"call_{uuid.uuid4().hex[:12]}"
+                                                    ),
+                                                    "name": tc.get("name", "unknown"),
+                                                    "input": tc.get("args", tc.get("input", {})),
+                                                }
+                                            )
                                         if blocks:
                                             self.publisher.publish_assistant(
                                                 session_id=session_id,
@@ -195,22 +204,27 @@ class ExecutionManager:
                                                 content=blocks,
                                             )
                                     elif msg_type == "tool":
-                                        tool_call_id = getattr(msg, "tool_call_id", f"call_{uuid.uuid4().hex[:12]}")
+                                        tool_call_id = getattr(
+                                            msg, "tool_call_id", f"call_{uuid.uuid4().hex[:12]}"
+                                        )
                                         tool_content = _serialize_content(
                                             getattr(msg, "content", "")
                                         )
                                         is_error = getattr(msg, "is_error", False) or (
-                                            getattr(msg, "additional_kwargs", {})
-                                            .get("is_error", False)
+                                            getattr(msg, "additional_kwargs", {}).get(
+                                                "is_error", False
+                                            )
                                         )
                                         self.publisher.publish_user_echo(
                                             session_id=session_id,
-                                            content=[{
-                                                "type": "tool_result",
-                                                "tool_use_id": tool_call_id,
-                                                "content": tool_content,
-                                                "is_error": is_error,
-                                            }],
+                                            content=[
+                                                {
+                                                    "type": "tool_result",
+                                                    "tool_use_id": tool_call_id,
+                                                    "content": tool_content,
+                                                    "is_error": is_error,
+                                                }
+                                            ],
                                         )
                             final_messages = msgs
                         if "structured_response" in data:

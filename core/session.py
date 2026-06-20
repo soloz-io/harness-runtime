@@ -35,10 +35,7 @@ class Session:
         if nodes:
             node_config = nodes[0].get("config", {})
             model_cfg = node_config.get("model", {})
-            self.model_name = (
-                model_cfg.get("model_name")
-                or model_cfg.get("model")
-            )
+            self.model_name = model_cfg.get("model_name") or model_cfg.get("model")
         if not self.model_name:
             raise ValueError(
                 "No model name found in agent definition. "
@@ -52,7 +49,11 @@ class Session:
             mcp_tools, handles = await load_mcp_tools_from_servers(self.mcp_servers)
             self.mcp_tools = mcp_tools
             self.mcp_handles = handles
-            logger.info("mcp_tools_loaded", count=len(mcp_tools), servers=[s.get("name") for s in self.mcp_servers])
+            logger.info(
+                "mcp_tools_loaded",
+                count=len(mcp_tools),
+                servers=[s.get("name") for s in self.mcp_servers],
+            )
 
     def initialize(self, resume_payload: Optional[Any] = None) -> None:
         if resume_payload:

@@ -35,9 +35,9 @@ structlog.configure(
     cache_logger_on_first_use=True,
 )
 
-from core.event_publisher import StdioPublisher
-from core.executor import ExecutionManager
-from core.session import Session
+from core.event_publisher import StdioPublisher  # noqa: E402
+from core.executor import ExecutionManager  # noqa: E402
+from core.session import Session  # noqa: E402
 
 logger = structlog.get_logger(__name__)
 
@@ -47,6 +47,7 @@ def main() -> None:
     # The Responses API doesn't work with non-OpenAI models (e.g. deepseek
     # via OpenAI-compatible endpoint), causing 404 on sub-agent delegation.
     from deepagents.profiles.provider import ProviderProfile, register_provider_profile
+
     register_provider_profile(
         "openai",
         ProviderProfile(init_kwargs={"use_responses_api": False}),
@@ -150,7 +151,8 @@ def main() -> None:
                         user_content = raw_content
                     elif isinstance(raw_content, list):
                         texts = [
-                            b.get("text", "") for b in raw_content
+                            b.get("text", "")
+                            for b in raw_content
                             if isinstance(b, dict) and b.get("type") == "text"
                         ]
                         user_content = " ".join(texts)

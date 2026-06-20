@@ -63,9 +63,7 @@ def read_turn(proc: subprocess.Popen[bytes]) -> list[dict[str, Any]]:
     return frames
 
 
-def read_frame_fast(
-    proc: subprocess.Popen[bytes], timeout_sec: float = 60.0
-) -> dict[str, Any]:
+def read_frame_fast(proc: subprocess.Popen[bytes], timeout_sec: float = 60.0) -> dict[str, Any]:
     """Read a single NDJSON frame with configurable timeout."""
     deadline = time.monotonic() + timeout_sec
     assert proc.stdout is not None
@@ -114,9 +112,7 @@ def save_artifacts(
     frames: list[dict[str, Any]],
     stderr: bytes = b"",
 ) -> None:
-    (artifact_dir / "frames.json").write_text(
-        json.dumps(frames, indent=2, default=str)
-    )
+    (artifact_dir / "frames.json").write_text(json.dumps(frames, indent=2, default=str))
     if stderr:
         (artifact_dir / "stderr.log").write_bytes(stderr)
 
@@ -132,15 +128,18 @@ _INPUT_PAYLOAD: dict[str, Any] = {
 
 def initialize(harness: subprocess.Popen[bytes], agent: dict[str, Any]) -> str:
     """Send initialize, return session_id."""
-    send(harness, {
-        "type": "control_request",
-        "request_id": "req_init",
-        "request": {
-            "subtype": "initialize",
-            "agent_definition": agent,
-            "input_payload": dict(_INPUT_PAYLOAD),
+    send(
+        harness,
+        {
+            "type": "control_request",
+            "request_id": "req_init",
+            "request": {
+                "subtype": "initialize",
+                "agent_definition": agent,
+                "input_payload": dict(_INPUT_PAYLOAD),
+            },
         },
-    })
+    )
     resp = read_frame(harness)
     assert resp["type"] == "control_response"
     assert resp["response"]["subtype"] == "success"
@@ -148,12 +147,15 @@ def initialize(harness: subprocess.Popen[bytes], agent: dict[str, Any]) -> str:
 
 
 def send_user(harness: subprocess.Popen[bytes], content: str = "I need help.") -> None:
-    send(harness, {
-        "type": "user",
-        "message": {"role": "user", "content": content},
-        "session_id": None,
-        "parent_tool_use_id": None,
-    })
+    send(
+        harness,
+        {
+            "type": "user",
+            "message": {"role": "user", "content": content},
+            "session_id": None,
+            "parent_tool_use_id": None,
+        },
+    )
 
 
 def initialize_and_assert_interrupt(
@@ -233,8 +235,7 @@ def get_checkpoint_ids(session_id: str) -> list[str]:
     with psycopg.connect(_DATABASE_URL) as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT checkpoint_id FROM checkpoints "
-                "WHERE thread_id = %s ORDER BY checkpoint_id",
+                "SELECT checkpoint_id FROM checkpoints WHERE thread_id = %s ORDER BY checkpoint_id",
                 (session_id,),
             )
             return [row[0] for row in cur.fetchall()]

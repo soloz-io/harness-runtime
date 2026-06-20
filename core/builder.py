@@ -77,6 +77,7 @@ logger = structlog.get_logger(__name__)
 
 class GraphBuilderError(Exception):
     """Raised when graph building fails."""
+
     pass
 
 
@@ -108,7 +109,6 @@ class GraphBuilder:
         self.checkpointer = checkpointer
         logger.info("graph_builder_initialized", has_checkpointer=checkpointer is not None)
 
-
     def build_from_definition(self, definition: Dict[str, Any]) -> Runnable[Any, Any]:
         """
         Build a complete LangGraph graph from an agent definition.
@@ -139,7 +139,9 @@ class GraphBuilder:
             if is_custom_topology(definition):
                 logger.info("detected_custom_topology_building_state_graph")
                 return build_custom_state_graph(
-                    definition, available_tools, self.checkpointer,
+                    definition,
+                    available_tools,
+                    self.checkpointer,
                 )
 
             # Step 2: Parse nodes from definition
@@ -166,7 +168,7 @@ class GraphBuilder:
                 "graph_structure_parsed",
                 total_nodes=len(nodes),
                 has_orchestrator=bool(orchestrator_config),
-                specialist_count=len(specialist_configs)
+                specialist_count=len(specialist_configs),
             )
 
             # Step 4: Build all sub-agents as CompiledSubAgent instances
@@ -193,10 +195,9 @@ class GraphBuilder:
 
             orchestrator_model_config = orchestrator_actual_config.get("model", {})
             orchestrator_provider = orchestrator_model_config.get("provider", "openai")
-            orchestrator_model_name = (
-                orchestrator_model_config.get("model_name")
-                or orchestrator_model_config.get("model")
-            )
+            orchestrator_model_name = orchestrator_model_config.get(
+                "model_name"
+            ) or orchestrator_model_config.get("model")
             if not orchestrator_model_name:
                 raise GraphBuilderError(
                     "Agent definition must specify a model "
@@ -222,7 +223,7 @@ class GraphBuilder:
                     logger.warning(
                         "orchestrator_tool_not_found",
                         tool_name=tool_name,
-                        available_tools=list(available_tools.keys())
+                        available_tools=list(available_tools.keys()),
                     )
 
             logger.info(
@@ -270,7 +271,7 @@ class GraphBuilder:
             logger.info(
                 "create_deep_agent_result",
                 runnable_type=type(main_runnable).__name__,
-                has_nodes=hasattr(main_runnable, 'nodes'),
+                has_nodes=hasattr(main_runnable, "nodes"),
             )
 
             logger.info(
@@ -284,9 +285,5 @@ class GraphBuilder:
             return main_runnable
 
         except Exception as e:
-            logger.error(
-                "graph_building_failed",
-                error=str(e),
-                error_type=type(e).__name__
-            )
+            logger.error("graph_building_failed", error=str(e), error_type=type(e).__name__)
             raise GraphBuilderError(f"Graph building failed: {e}") from e
