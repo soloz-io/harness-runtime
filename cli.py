@@ -1,10 +1,7 @@
-import asyncio
-import json
 import logging
 import os
 import sys
 from pathlib import Path
-from typing import Any, NoReturn
 
 import structlog
 from dotenv import load_dotenv
@@ -12,9 +9,6 @@ from dotenv import load_dotenv
 env_path = Path(__file__).parent / ".env"
 load_dotenv(dotenv_path=env_path)
 
-# ---------------------------------------------------------------------------
-# Logging configuration — must be before core imports (they log at import time)
-# ---------------------------------------------------------------------------
 _log_level = os.getenv("HARNESS_LOG_LEVEL")
 _log_file = os.getenv("HARNESS_LOG_FILE")
 
@@ -29,23 +23,15 @@ if _log_level and _log_file:
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-# Structured stderr logging (production stdout must be pure NDJSON)
 structlog.configure(
     logger_factory=structlog.PrintLoggerFactory(sys.stderr),
     cache_logger_on_first_use=True,
 )
 
-from core.event_publisher import StdioPublisher  # noqa: E402
-from core.executor import ExecutionManager  # noqa: E402
-from core.session import Session  # noqa: E402
-
 logger = structlog.get_logger(__name__)
 
 
 def main() -> None:
-    # Disable deepagents' built-in OpenAI Responses API default.
-    # The Responses API doesn't work with non-OpenAI models (e.g. deepseek
-    # via OpenAI-compatible endpoint), causing 404 on sub-agent delegation.
     from deepagents.profiles.provider import ProviderProfile, register_provider_profile
 
     register_provider_profile(
@@ -55,128 +41,20 @@ def main() -> None:
 
     database_url = os.getenv("DATABASE_URL")
     if not database_url:
-        _error_exit("DATABASE_URL environment variable is required", 2)
+        logger.error("DATABASE_URL environment variable is required")
+        sys.exit(2)
 
-    session: Session | None = None
-    execution_manager: ExecutionManager | None = None
-    publisher = StdioPublisher()
+    import uvicorn
 
-    try:
-        execution_manager = ExecutionManager(
-            postgres_connection_string=database_url,
-            publisher=publisher,
-        )
-
-        for line in sys.stdin:
-            line = line.strip()
-            if not line:
-                continue
-
-            try:
-                msg = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-
-            msg_type = msg.get("type")
-
-            if msg_type == "control_request":
-                request = msg.get("request", {})
-                subtype = request.get("subtype")
-                request_id = msg.get("request_id", "")
-
-                if subtype == "initialize":
-                    agent_definition = request.get("agent_definition", {})
-                    input_payload = request.get("input_payload", {})
-                    resume_payload: Any = request.get("resume_payload")
-                    existing_session_id: str | None = request.get("session_id")
-                    mcp_servers: list[dict[str, Any]] = request.get("sdk_mcp_servers", [])
-
-                    session = Session(
-                        agent_definition=agent_definition,
-                        input_payload=input_payload,
-                        execution_manager=execution_manager,
-                        publisher=publisher,
-                        mcp_servers=mcp_servers,
-                        session_id=existing_session_id,
-                    )
-                    session.initialize(resume_payload=resume_payload)
-
-                    user_mcp_servers = agent_definition.get("mcp_servers", [])
-                    if mcp_servers:
-                        try:
-                            asyncio.run(session.initialize_async())
-                        except Exception:
-                            if user_mcp_servers:
-                                raise
-                            logger.warning("sdk_mcp_tools_load_failed", exc_info=True)
-
-                    publisher.publish_control_response(
-                        request_id=request_id,
-                        session_id=session.session_id,
-                    )
-
-                    if resume_payload:
-                        try:
-                            session.resume_turn(resume_payload)
-                        except Exception as e:
-                            logger.error(f"Error during resume_turn: {e}", exc_info=True)
-                            publisher.publish_result(
-                                session_id=session.session_id,
-                                subtype="error_during_execution",
-                                is_error=True,
-                                result=str(e),
-                            )
-                            sys.exit(1)
-
-                elif subtype == "interrupt":
-                    publisher.publish_control_response(
-                        request_id=request_id,
-                    )
-
-            elif msg_type == "user":
-                if session is None:
-                    publisher.publish_result(
-                        session_id="",
-                        subtype="error_during_execution",
-                        is_error=True,
-                        result="Session not initialized",
-                    )
-                    continue
-
-                try:
-                    user_content = ""
-                    user_msg = msg.get("message", {})
-                    raw_content = user_msg.get("content", "")
-                    if isinstance(raw_content, str):
-                        user_content = raw_content
-                    elif isinstance(raw_content, list):
-                        texts = [
-                            b.get("text", "")
-                            for b in raw_content
-                            if isinstance(b, dict) and b.get("type") == "text"
-                        ]
-                        user_content = " ".join(texts)
-
-                    session.run_turn(user_content=user_content)
-                except Exception:
-                    # Executor already published error result frame
-                    sys.exit(1)
-
-    except KeyboardInterrupt:
-        pass
-    finally:
-        if execution_manager:
-            execution_manager.close()
-        if session:
-            try:
-                asyncio.run(session.cleanup())
-            except Exception:
-                pass
-
-
-def _error_exit(message: str, code: int = 1) -> NoReturn:
-    print(message, file=sys.stderr)
-    sys.exit(code)
+    port = int(os.getenv("PORT", "3000"))
+    logger.info("starting_http_server", port=port)
+    uvicorn.run(
+        "api.main:app",
+        host="0.0.0.0",
+        port=port,
+        log_level="info",
+        lifespan="on",
+    )
 
 
 if __name__ == "__main__":

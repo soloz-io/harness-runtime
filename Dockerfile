@@ -13,6 +13,7 @@ COPY pyproject.toml README.md ./
 COPY __init__.py cli.py ./
 COPY core/ ./core/
 COPY models/ ./models/
+COPY api/ ./api/
 COPY scripts/ ./scripts/
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
