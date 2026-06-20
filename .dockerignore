@@ -8,6 +8,10 @@ __pycache__/
 dist/
 build/
 *.egg
+log
+tests
+codebase.md
+uv.lock
 
 # Virtual environments
 venv/
@@ -35,6 +39,9 @@ htmlcov/
 *.md
 !README.md
 docs/
+
+# References (contains large git submodules not needed in image)
+references/
 
 # Git
 .git/
