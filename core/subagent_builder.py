@@ -158,13 +158,12 @@ def build_subagent(
         # Check if state_schema or rubric is defined
         has_state_schema = "state_schema" in specialist_config
         has_rubric = "rubric" in specialist_config
-
+        
         if (has_state_schema or has_rubric) and DEEPAGENTS_AVAILABLE:
             # PATH A: Create CompiledSubAgent with custom state schema / rubric
-            return _build_compiled_subagent_with_schema(
-                agent_name, model_identifier, system_prompt,
-                filtered_tools, specialist_config, brief_description,
-                response_format
+            return _build_compiled_subagent(
+                agent_name, model_identifier, system_prompt, 
+                filtered_tools, specialist_config, brief_description, response_format
             )
         else:
             # PATH B: Return SubAgent dict (let SubAgentMiddleware handle it)
@@ -188,32 +187,34 @@ def build_subagent(
 
 
 
-def _build_compiled_subagent_with_schema(
+def _build_compiled_subagent(
     agent_name: str,
     model_identifier: str,
     system_prompt: str,
     filtered_tools: List[BaseTool],
     specialist_config: Dict[str, Any],
     brief_description: str,
-    response_format: Any = None,
+    response_format: Any = None
 ) -> Any:  # Returns CompiledSubAgent
-    """Build CompiledSubAgent with custom state schema."""
-
-    # Create state schema from config (or use None if missing but we need rubric)
+    """Build CompiledSubAgent with optional state schema and filesystem middleware."""
+    
+    # Create state schema from config if provided
     state_schema_config = specialist_config.get("state_schema")
-    state_schema_class = None
     if state_schema_config:
-        state_schema_class = create_state_schema_from_config(state_schema_config)
+        state_schema_class = create_state_schema_from_config(state_schema_config)  # type: ignore
+        logger.info(
+            "building_compiled_subagent",
+            agent_name=agent_name,
+            state_fields=list(state_schema_config.keys())
+        )
+    else:
+        state_schema_class = None
+        logger.info(
+            "building_compiled_subagent",
+            agent_name=agent_name,
+            state_fields=[]
+        )
 
-    logger.info(
-        "building_compiled_subagent_with_schema",
-        agent_name=agent_name,
-        state_fields=list(state_schema_config.keys()) if state_schema_config else [],
-        has_response_format=response_format is not None,
-        has_rubric="rubric" in specialist_config,
-    )
-
-    # Build agent runnable with context_schema, rubric, and optional response_format
     middleware_stack = []
     
     # Prepend rubric middleware if configured
@@ -225,12 +226,12 @@ def _build_compiled_subagent_with_schema(
         middleware_stack.extend(rubric_middlewares)
         
     middleware_stack.extend([
-        FilesystemMiddleware(),
-        PatchToolCallsMiddleware(),
+        FilesystemMiddleware(),  # type: ignore
+        PatchToolCallsMiddleware()  # type: ignore
     ])
     if specialist_config.get("interrupt_on"):
         middleware_stack.append(HumanInTheLoopMiddleware(interrupt_on=specialist_config["interrupt_on"]))
-
+    
     create_agent_kwargs: dict[str, Any] = {
         "model": model_identifier,
         "system_prompt": system_prompt,
@@ -242,10 +243,10 @@ def _build_compiled_subagent_with_schema(
     if response_format is not None:
         create_agent_kwargs["response_format"] = response_format
 
-    subagent_runnable = create_agent(**create_agent_kwargs)
+    subagent_runnable = create_agent(**create_agent_kwargs)  # type: ignore
 
     # Wrap in CompiledSubAgent
-    compiled_subagent = CompiledSubAgent(
+    compiled_subagent = CompiledSubAgent(  # type: ignore
         name=agent_name,
         description=brief_description,
         runnable=subagent_runnable,
@@ -256,8 +257,8 @@ def _build_compiled_subagent_with_schema(
         agent_name=agent_name,
         model_identifier=model_identifier,
         tool_count=len(filtered_tools),
-        tool_names=[t.name for t in filtered_tools],
-        has_state_schema=True,
+        tool_names=[getattr(t, "name", str(t)) for t in filtered_tools],
+        has_state_schema=bool(state_schema_config),
         return_type="CompiledSubAgent"
     )
 
@@ -295,7 +296,7 @@ def _build_subagent_dict(
         agent_name=agent_name,
         model_identifier=model_identifier,
         tool_count=len(filtered_tools),
-        tool_names=[t.name for t in filtered_tools],
+        tool_names=[getattr(t, "name", str(t)) for t in filtered_tools],
         has_state_schema=False,
         return_type="SubAgent_dict"
     )
