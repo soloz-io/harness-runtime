@@ -13,6 +13,7 @@ from langchain_core.runnables import Runnable
 from core.interfaces import TopologyBuilder
 from core.structured_output import build_tool_strategy, resolve_structured_output_model
 from core.subagent_builder import build_subagent
+from core.rubric_middleware import build_rubric_middlewares
 
 try:
     from deepagents import create_deep_agent
@@ -122,6 +123,7 @@ class StartTopologyBuilder(TopologyBuilder):
         )
 
         interrupt_on_config = orchestrator_actual_config.get("interrupt_on")
+        rubric_config = orchestrator_actual_config.get("rubric")
 
         deep_agent_kwargs: dict[str, Any] = {
             "model": resolve_structured_output_model(
@@ -135,6 +137,12 @@ class StartTopologyBuilder(TopologyBuilder):
             "checkpointer": checkpointer,
             "debug": True,
         }
+        
+        # Build middlewares starting with Rubric if configured
+        middleware_stack = build_rubric_middlewares(rubric_config, deep_agent_kwargs["model"])
+        if middleware_stack:
+            deep_agent_kwargs["middleware"] = middleware_stack
+
         if interrupt_on_config:
             deep_agent_kwargs["interrupt_on"] = interrupt_on_config
         if orchestrator_response_format is not None:

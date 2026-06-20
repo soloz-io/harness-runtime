@@ -20,6 +20,7 @@ import structlog
 from langchain_core.tools import BaseTool
 
 from core.model_identifier import create_model_identifier
+from core.rubric_middleware import build_rubric_middlewares
 
 # Import deep agents pattern components
 # Note: The spec requires deepagents package with create_deep_agent and CompiledSubAgent
@@ -154,11 +155,12 @@ def build_subagent(
             has_response_format=response_format is not None,
         )
 
-        # Check if state_schema is defined
+        # Check if state_schema or rubric is defined
         has_state_schema = "state_schema" in specialist_config
+        has_rubric = "rubric" in specialist_config
 
-        if has_state_schema and DEEPAGENTS_AVAILABLE:
-            # PATH A: Create CompiledSubAgent with custom state schema
+        if (has_state_schema or has_rubric) and DEEPAGENTS_AVAILABLE:
+            # PATH A: Create CompiledSubAgent with custom state schema / rubric
             return _build_compiled_subagent_with_schema(
                 agent_name, model_identifier, system_prompt,
                 filtered_tools, specialist_config, brief_description,
@@ -197,22 +199,35 @@ def _build_compiled_subagent_with_schema(
 ) -> Any:  # Returns CompiledSubAgent
     """Build CompiledSubAgent with custom state schema."""
 
-    # Create state schema from config
-    state_schema_config = specialist_config["state_schema"]
-    state_schema_class = create_state_schema_from_config(state_schema_config)
+    # Create state schema from config (or use None if missing but we need rubric)
+    state_schema_config = specialist_config.get("state_schema")
+    state_schema_class = None
+    if state_schema_config:
+        state_schema_class = create_state_schema_from_config(state_schema_config)
 
     logger.info(
         "building_compiled_subagent_with_schema",
         agent_name=agent_name,
-        state_fields=list(state_schema_config.keys()),
+        state_fields=list(state_schema_config.keys()) if state_schema_config else [],
         has_response_format=response_format is not None,
+        has_rubric="rubric" in specialist_config,
     )
 
-    # Build agent runnable with context_schema and optional response_format
-    middleware_stack = [
+    # Build agent runnable with context_schema, rubric, and optional response_format
+    middleware_stack = []
+    
+    # Prepend rubric middleware if configured
+    rubric_config = specialist_config.get("rubric")
+    if rubric_config:
+        # Resolve model to BaseChatModel or identifier format required by DeepAgents
+        # We pass the model_identifier string directly, and RubricMiddleware will lazily initialize or complain
+        rubric_middlewares = build_rubric_middlewares(rubric_config, model_identifier)
+        middleware_stack.extend(rubric_middlewares)
+        
+    middleware_stack.extend([
         FilesystemMiddleware(),
         PatchToolCallsMiddleware(),
-    ]
+    ])
     if specialist_config.get("interrupt_on"):
         middleware_stack.append(HumanInTheLoopMiddleware(interrupt_on=specialist_config["interrupt_on"]))
 
@@ -220,9 +235,10 @@ def _build_compiled_subagent_with_schema(
         "model": model_identifier,
         "system_prompt": system_prompt,
         "tools": filtered_tools,
-        "context_schema": state_schema_class,
         "middleware": middleware_stack,
     }
+    if state_schema_class is not None:
+        create_agent_kwargs["context_schema"] = state_schema_class
     if response_format is not None:
         create_agent_kwargs["response_format"] = response_format
 
