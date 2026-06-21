@@ -7,15 +7,19 @@ on:
       - ".github/workflows/publish.yml"
       - "pyproject.toml"
       - "cli.py"
+      - "api/**"
       - "core/**"
       - "models/**"
+      - "tests/**"
   pull_request:
     branches: [main]
     paths:
       - "pyproject.toml"
       - "cli.py"
+      - "api/**"
       - "core/**"
       - "models/**"
+      - "tests/**"
   release:
     types: [published]
 
@@ -34,8 +38,49 @@ jobs:
       - run: pip install ruff
       - run: ruff check .
 
-  build:
+  test:
     needs: lint
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: waypoint
+          POSTGRES_PASSWORD: waypoint
+          POSTGRES_DB: waypoint_test
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: sudo apt-get update && sudo apt-get install -y redis-server
+      - run: pip install -e ".[dev]"
+      - run: redis-server --daemonize yes --port 6379
+
+      - name: Run all integration tests
+        run: PYTHONPATH=. pytest tests/ -v
+        env:
+          DATABASE_URL: postgresql://waypoint:waypoint@localhost:5433/waypoint_test
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+
+      - name: Upload test logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-logs
+          path: log/
+          retention-days: 7
+
+  build:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

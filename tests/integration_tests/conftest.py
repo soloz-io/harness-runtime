@@ -1,63 +1,62 @@
-"""Shared fixtures for harness-runtime integration tests.
+"""Shared fixtures for harness-runtime HTTP integration tests.
 
-The harness fixture starts a CLI subprocess per test (function-scoped),
-matching how the Waypoint SDK spawns the runtime.
+The sse_server fixture starts a uvicorn subprocess per module
+(module-scoped), serving the FastAPI app on a dedicated port.
+All integration tests should use this instead of the legacy
+CLI subprocess approach.
 """
 
 from __future__ import annotations
 
-import os
+import httpx
+import pytest
 import subprocess
 import sys
 import time
 from pathlib import Path
 
-import pytest
+_HTTP_PORT = 9876
+BASE_URL = f"http://127.0.0.1:{_HTTP_PORT}"
 
 
-@pytest.fixture(scope="function")
-def harness(artifact_dir: Path) -> subprocess.Popen[bytes]:
-    """Start the CLI subprocess once per test, saving artifacts."""
+@pytest.fixture(scope="module")
+def sse_server() -> None:
+    """Start the HTTP server as a subprocess on port 9876.
+
+    Uses cli.py which starts Redis + uvicorn.  Module-scoped so
+    all tests in a file share one server instance.
+    """
     cli_path = Path(__file__).parent.parent.parent / "cli.py"
-    if not cli_path.exists():
-        import shutil
-
-        installed = shutil.which("harness-runtime")
-        if not installed:
-            pytest.fail("harness-runtime not found. Install with: pip install -e .")
-        cli_path = Path(installed)
-
-    log_dir = Path(__file__).parent.parent / "log"
-    log_dir.mkdir(parents=True, exist_ok=True)
 
     proc = subprocess.Popen(
         [sys.executable, str(cli_path)],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
         env={
-            **os.environ,
+            **__import__("os").environ,
             "PYTHONUNBUFFERED": "1",
-            "HARNESS_LOG_FILE": str(log_dir / "harness-cli.log"),
-            "HARNESS_LOG_LEVEL": "DEBUG",
+            "PORT": str(_HTTP_PORT),
         },
     )
 
-    for _ in range(100):
+    for _ in range(200):
         if proc.poll() is not None:
-            pytest.fail(f"CLI exited prematurely (code {proc.returncode})")
+            pytest.fail(f"Server exited prematurely (code {proc.returncode})")
+        try:
+            resp = httpx.get(f"{BASE_URL}/health", timeout=2.0)
+            if resp.status_code == 200:
+                break
+        except (httpx.ConnectError, httpx.TimeoutException):
+            pass
         time.sleep(0.1)
+    else:
+        proc.kill()
+        pytest.fail("SSE server did not start within 20s")
 
-    yield proc
+    yield
 
-    proc.stdin.close()
+    proc.terminate()
     try:
         proc.wait(timeout=5)
     except subprocess.TimeoutExpired:
         proc.kill()
-        proc.wait(timeout=5)
-
-    if proc.stderr:
-        stderr = proc.stderr.read()
-        if stderr:
-            (artifact_dir / "stderr.log").write_bytes(stderr)

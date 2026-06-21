@@ -88,14 +88,14 @@ async def _run_turn_async(
 @router.post("/session/{session_id}/message")
 async def handle_message(session_id: str, body: dict[str, Any]) -> dict[str, Any]:
     message = body.get("message", "")
-    if not message:
-        raise HTTPException(status_code=400, detail="message is required")
-
     agent_definition = body.get("agent_definition")
     input_payload = body.get("input_payload", {})
+    resume_payload = body.get("resume_payload")
 
     if session_id in _session_store:
         state = _session_store[session_id]
+        if resume_payload:
+            state.session.initialize(resume_payload=resume_payload)
     else:
         publisher = SSEEventPublisher(session_id)
         if not _execution_manager:
@@ -110,11 +110,14 @@ async def handle_message(session_id: str, body: dict[str, Any]) -> dict[str, Any
             )
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
+        if resume_payload:
+            session.initialize(resume_payload=resume_payload)
         state = SessionState(session=session, publisher=publisher)
         _session_store[session_id] = state
         logger.info("session_initialized", session_id=session_id)
 
-    asyncio.create_task(_run_turn_async(state.session, state.publisher, message))
+    if message or resume_payload:
+        asyncio.create_task(_run_turn_async(state.session, state.publisher, message))
 
     return {"success": True}
 
@@ -163,7 +166,6 @@ async def stream_events(session_id: Optional[str] = None) -> EventSourceResponse
                 for entry_id, fields in entries:
                     data_raw = fields.get(b"data", b"")
                     if data_raw == _SENTINEL:
-                        _session_store.pop(resolved_id, None)
                         return
                     yield {"event": "message", "data": data_raw.decode("utf-8")}
                     last_id = entry_id

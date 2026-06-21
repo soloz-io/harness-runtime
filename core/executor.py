@@ -98,6 +98,7 @@ class ExecutionManager:
         self._async_checkpointer_context = None
         if postgres_connection_string:
             await self._async_setup_checkpointer()
+            self.checkpointer = self._async_checkpointer
         return self
 
     async def _async_setup_checkpointer(self) -> None:
