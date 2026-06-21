@@ -1,5 +1,7 @@
-import asyncio
+import json
 from typing import Any, Optional
+
+import redis
 
 from core.event_publisher import EventPublisher
 from models.frames import (
@@ -13,24 +15,43 @@ from models.frames import (
     frame_to_dict,
 )
 
+_redis_client: Optional[redis.Redis] = None
+_SENTINEL = b"\x00end\x00"
+
+
+def set_redis_client(client: redis.Redis) -> None:
+    global _redis_client
+    _redis_client = client
+
+
+def get_redis_client() -> redis.Redis:
+    assert _redis_client is not None, "Redis not initialized"
+    return _redis_client
+
+
+def _stream_key(session_id: str) -> str:
+    return f"session:{session_id}:events"
+
 
 class SSEEventPublisher(EventPublisher):
     def __init__(self, session_id: str) -> None:
         self.session_id = session_id
-        self.queue: asyncio.Queue[Optional[dict[str, Any]]] = asyncio.Queue()
-        self._loop = asyncio.get_running_loop()
-
-    def _put_nowait(self, item: Optional[dict[str, Any]]) -> None:
-        self.queue.put_nowait(item)
+        self._stream_key = _stream_key(session_id)
+        self._closed = False
 
     def _write(self, frame: OutgoingFrame) -> None:
-        self._loop.call_soon_threadsafe(self._put_nowait, frame_to_dict(frame))
-
-    async def next_event(self) -> Optional[dict[str, Any]]:
-        return await self.queue.get()
+        if self._closed:
+            return
+        r = get_redis_client()
+        r.xadd(self._stream_key, {"data": json.dumps(frame_to_dict(frame), default=str)})
 
     def close(self) -> None:
-        self._loop.call_soon_threadsafe(self._put_nowait, None)
+        if self._closed:
+            return
+        self._closed = True
+        r = get_redis_client()
+        r.xadd(self._stream_key, {"data": _SENTINEL})
+        r.expire(self._stream_key, 60)
 
     def publish_system_init(
         self, *, session_id: str, model: str, tools: Optional[list[dict[str, Any]]] = None

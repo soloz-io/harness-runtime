@@ -20,6 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
     libpq-dev \
     gcc \
+    redis-server \
     && uv pip install --system --no-cache -e "." \
     && apt-get purge -y --auto-remove gcc libpq-dev \
     && rm -rf /var/lib/apt/lists/*
