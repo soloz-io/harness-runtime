@@ -13,6 +13,7 @@ log
 uv.lock
 .ruff_cache
 deepagents_runtime.egg-info
+harness_runtime.egg-info
 codebase.md
 dev
 tests/integration/outputs
