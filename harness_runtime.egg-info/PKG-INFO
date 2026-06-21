@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: harness-runtime
-Version: 0.1.11
+Version: 0.1.12
 Summary: LangGraph Agent Execution Engine — HTTP server mode
 Author: Bizmatters Team
 Requires-Python: >=3.11
@@ -29,6 +29,7 @@ Requires-Dist: black>=24.1.1; extra == "dev"
 Requires-Dist: ruff>=0.1.13; extra == "dev"
 Requires-Dist: mypy>=1.8.0; extra == "dev"
 Requires-Dist: ty>=0.0.46; extra == "dev"
+Requires-Dist: jsonschema>=4.20.0; extra == "dev"
 
 # harness-runtime
 
