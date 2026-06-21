@@ -18,15 +18,19 @@ class SSEEventPublisher(EventPublisher):
     def __init__(self, session_id: str) -> None:
         self.session_id = session_id
         self.queue: asyncio.Queue[Optional[dict[str, Any]]] = asyncio.Queue()
+        self._loop = asyncio.get_running_loop()
+
+    def _put_nowait(self, item: Optional[dict[str, Any]]) -> None:
+        self.queue.put_nowait(item)
 
     def _write(self, frame: OutgoingFrame) -> None:
-        self.queue.put_nowait(frame_to_dict(frame))
+        self._loop.call_soon_threadsafe(self._put_nowait, frame_to_dict(frame))
 
     async def next_event(self) -> Optional[dict[str, Any]]:
         return await self.queue.get()
 
     def close(self) -> None:
-        self.queue.put_nowait(None)
+        self._loop.call_soon_threadsafe(self._put_nowait, None)
 
     def publish_system_init(
         self, *, session_id: str, model: str, tools: Optional[list[dict[str, Any]]] = None
