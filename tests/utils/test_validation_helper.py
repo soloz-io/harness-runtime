@@ -24,7 +24,7 @@ def test_validate_workflow_result_success():
         },
     }
 
-    is_valid, errors = validate_workflow_result(result)
+    is_valid, errors = validate_workflow_result(result, [])
     assert is_valid, f"Expected valid result, got errors: {errors}"
     assert len(errors) == 0
     print("✅ test_validate_workflow_result_success passed")
@@ -38,7 +38,7 @@ def test_validate_workflow_result_halt_error():
         "final_state": {},
     }
 
-    is_valid, errors = validate_workflow_result(result)
+    is_valid, errors = validate_workflow_result(result, [])
     assert not is_valid, "Expected invalid result for HALT error"
     assert len(errors) > 0
     assert any("HALT" in error for error in errors)
@@ -46,20 +46,19 @@ def test_validate_workflow_result_halt_error():
 
 
 def test_validate_workflow_result_missing_definition():
-    """Test validation with missing definition."""
+    """Test validation with missing/empty final_state (output does not indicate success)."""
     result = {"status": "completed", "output": "Some output", "final_state": {}}
 
-    is_valid, errors = validate_workflow_result(result)
+    is_valid, errors = validate_workflow_result(result, [])
     assert not is_valid, "Expected invalid result for missing definition"
-    # The error message says "No definition object found in final_state"
-    assert any("definition" in error or "final_state" in error for error in errors), (
-        f"Expected definition error, got: {errors}"
+    assert any("output" in error.lower() for error in errors), (
+        f"Expected output-related error, got: {errors}"
     )
     print("✅ test_validate_workflow_result_missing_definition passed")
 
 
 def test_validate_workflow_result_empty_nodes():
-    """Test validation with empty nodes."""
+    """Test validation with empty nodes (output does not indicate success)."""
     result = {
         "status": "completed",
         "output": "Some output",
@@ -74,9 +73,9 @@ def test_validate_workflow_result_empty_nodes():
         },
     }
 
-    is_valid, errors = validate_workflow_result(result)
+    is_valid, errors = validate_workflow_result(result, [])
     assert not is_valid, "Expected invalid result for empty nodes"
-    assert any("nodes" in error.lower() for error in errors)
+    assert any("output" in error.lower() for error in errors)
     print("✅ test_validate_workflow_result_empty_nodes passed")
 
 

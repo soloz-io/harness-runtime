@@ -110,9 +110,10 @@ GATE_MULTI: dict[str, Any] = {
                 "tools": ["hitl_gate"],
                 "interrupt_on": {"hitl_gate": {"allowed_decisions": ["approve", "reject"]}},
                 "system_prompt": (
-                    "Call hitl_gate with response 'first'. "
-                    "After it returns, call hitl_gate with response 'second'. "
-                    "After the second call returns, respond with 'done'."
+                    "You MUST call the hitl_gate tool with response 'first'. "
+                    "After it returns, you MUST call hitl_gate with response 'second'. "
+                    "After the second call returns, respond with 'done'. "
+                    "Do not respond with any text except through the tool."
                 ),
             },
         }
