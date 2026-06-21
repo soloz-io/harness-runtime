@@ -1,6 +1,9 @@
 README.md
 cli.py
 pyproject.toml
+api/__init__.py
+api/main.py
+api/publisher.py
 core/__init__.py
 core/acrylic_topology.py
 core/builder.py
@@ -12,6 +15,7 @@ core/mcp_loader.py
 core/model_factory.py
 core/model_identifier.py
 core/node_compiler.py
+core/rubric_middleware.py
 core/session.py
 core/start_topology.py
 core/state_schema_builder.py
@@ -26,4 +30,3 @@ harness_runtime.egg-info/requires.txt
 harness_runtime.egg-info/top_level.txt
 models/__init__.py
 models/frames.py
-tests/test_model_thinking.py
