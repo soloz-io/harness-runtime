@@ -62,6 +62,37 @@ class Session:
             logger.info("session_initialized", session_id=self.session_id)
         self.resume_payload = resume_payload
 
+    async def async_run_turn(
+        self, user_content: str = "", publisher: Optional[EventPublisher] = None
+    ) -> str:
+        self.turns += 1
+
+        input_payload = dict(self.base_payload)
+        messages = input_payload.get("messages", [])
+        if user_content:
+            messages = messages + [{"role": "user", "content": user_content}]
+        input_payload["messages"] = messages
+
+        compiled_graph = build_agent_from_definition(
+            self.agent_definition,
+            checkpointer=self.checkpointer,
+            extra_tools=self.mcp_tools if self.mcp_tools else None,
+        )
+
+        resume = getattr(self, "resume_payload", None)
+        result = await self.execution_manager.async_execute(
+            graph=compiled_graph,
+            session_id=self.session_id,
+            input_payload=input_payload,
+            model_name=self.model_name,
+            publisher=publisher or self.publisher,
+            agent_definition=self.agent_definition,
+            num_turns=self.turns,
+            resume_payload=resume,
+        )
+
+        return result
+
     def run_turn(self, user_content: str = "") -> str:
         self.turns += 1
 

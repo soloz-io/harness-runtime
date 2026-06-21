@@ -3,23 +3,21 @@ import json
 import os
 import time
 import traceback
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, AsyncGenerator, Optional
 
+import redis.asyncio as aioredis
 import structlog
 from fastapi import APIRouter, HTTPException
 from sse_starlette.sse import EventSourceResponse
 
-from api.publisher import SSEEventPublisher
+from api.publisher import _SENTINEL, SSEEventPublisher, _stream_key
 from core.executor import ExecutionManager
 from core.session import Session
 
 logger = structlog.get_logger(__name__)
 
 router = APIRouter(tags=["sessions"])
-
-_executor = ThreadPoolExecutor(max_workers=4)
 
 _db_url: str = os.environ.get("DATABASE_URL", "")
 
@@ -32,6 +30,24 @@ class SessionState:
 
 _session_store: dict[str, SessionState] = {}
 _execution_manager: Optional[ExecutionManager] = None
+
+
+async def init_execution_manager_async() -> None:
+    global _execution_manager
+    if _execution_manager is None:
+        if not _db_url:
+            logger.error("DATABASE_URL not set, starting without checkpointer")
+            _execution_manager = await ExecutionManager.create_async(
+                postgres_connection_string="",
+                publisher=SSEEventPublisher("_init_"),
+            )
+        else:
+            publisher = SSEEventPublisher("_init_")
+            _execution_manager = await ExecutionManager.create_async(
+                postgres_connection_string=_db_url,
+                publisher=publisher,
+            )
+        logger.info("execution_manager_initialized")
 
 
 def init_execution_manager() -> None:
@@ -52,9 +68,11 @@ def init_execution_manager() -> None:
         logger.info("execution_manager_initialized")
 
 
-def _run_turn(session: Session, publisher: SSEEventPublisher, user_content: str) -> None:
+async def _run_turn_async(
+    session: Session, publisher: SSEEventPublisher, user_content: str
+) -> None:
     try:
-        session.run_turn(user_content=user_content)
+        await session.async_run_turn(user_content=user_content, publisher=publisher)
     except Exception as e:
         logger.error("session_run_turn_failed", error=str(e), traceback=traceback.format_exc())
         publisher.publish_result(
@@ -96,8 +114,7 @@ async def handle_message(session_id: str, body: dict[str, Any]) -> dict[str, Any
         _session_store[session_id] = state
         logger.info("session_initialized", session_id=session_id)
 
-    loop = asyncio.get_event_loop()
-    loop.run_in_executor(_executor, _run_turn, state.session, state.publisher, message)
+    asyncio.create_task(_run_turn_async(state.session, state.publisher, message))
 
     return {"success": True}
 
@@ -116,18 +133,39 @@ async def stream_events(session_id: Optional[str] = None) -> EventSourceResponse
     if not _session_store:
         raise HTTPException(status_code=404, detail="No active sessions")
 
-    state = _session_store[session_id] if session_id else list(_session_store.values())[-1]
-    publisher = state.publisher
+    if session_id and session_id not in _session_store:
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+
+    resolved_id = session_id or list(_session_store.keys())[-1]
 
     async def event_generator() -> AsyncGenerator[dict[str, Any], None]:
         yield {
             "event": "message",
-            "data": json.dumps({"type": "connected", "session_id": session_id}),
+            "data": json.dumps({"type": "connected", "session_id": resolved_id}),
         }
+
+        r = aioredis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379/0"))
+        key = _stream_key(resolved_id)
+        last_id = "0"
+
         while True:
-            event_data = await publisher.next_event()
-            if event_data is None:
-                break
-            yield {"event": "message", "data": json.dumps(event_data)}
+            try:
+                result = await r.xread({key: last_id}, count=10, block=2000)
+            except Exception:
+                await asyncio.sleep(0.5)
+                continue
+
+            if not result:
+                yield {"event": "ping", "data": ""}
+                continue
+
+            for _stream_name, entries in result:
+                for entry_id, fields in entries:
+                    data_raw = fields.get(b"data", b"")
+                    if data_raw == _SENTINEL:
+                        _session_store.pop(resolved_id, None)
+                        return
+                    yield {"event": "message", "data": data_raw.decode("utf-8")}
+                    last_id = entry_id
 
     return EventSourceResponse(event_generator())

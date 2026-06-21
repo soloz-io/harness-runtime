@@ -1,6 +1,6 @@
 [project]
 name = "harness-runtime"
-version = "0.1.10"
+version = "0.1.11"
 description = "LangGraph Agent Execution Engine — HTTP server mode"
 authors = [
     {name = "Bizmatters Team"}
@@ -21,6 +21,7 @@ dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
     "sse-starlette>=2.1.0",
+    "redis[hiredis]>=5.0.0",
 ]
 
 [project.optional-dependencies]

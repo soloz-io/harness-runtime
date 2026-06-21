@@ -1,10 +1,13 @@
+import os
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
+import redis
 import structlog
 from dotenv import load_dotenv
 from fastapi import FastAPI
 
+from api.publisher import set_redis_client
 from api.routers import health, sessions
 
 logger = structlog.get_logger(__name__)
@@ -14,7 +17,14 @@ logger = structlog.get_logger(__name__)
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     load_dotenv()
     logger.info("harness_runtime_http_starting")
-    sessions.init_execution_manager()
+
+    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    r = redis.Redis.from_url(redis_url, decode_responses=False)
+    r.ping()
+    set_redis_client(r)
+    logger.info("redis_client_initialized")
+
+    await sessions.init_execution_manager_async()
     logger.info("harness_runtime_http_started")
     yield
     logger.info("harness_runtime_http_shutting_down")

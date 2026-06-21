@@ -1,6 +1,8 @@
 import logging
 import os
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 import structlog
@@ -31,6 +33,20 @@ structlog.configure(
 logger = structlog.get_logger(__name__)
 
 
+def _start_redis() -> None:
+    redis_port = os.getenv("REDIS_PORT", "6379")
+    try:
+        subprocess.run(
+            ["redis-server", "--daemonize", "yes", "--port", redis_port],
+            check=True,
+            capture_output=True,
+        )
+        time.sleep(0.5)
+        logger.info("redis_server_started", port=redis_port)
+    except Exception:
+        logger.warning("redis_server_start_failed", exc_info=True)
+
+
 def main() -> None:
     from deepagents.profiles.provider import ProviderProfile, register_provider_profile
 
@@ -43,6 +59,8 @@ def main() -> None:
     if not database_url:
         logger.error("DATABASE_URL environment variable is required")
         sys.exit(2)
+
+    _start_redis()
 
     import uvicorn
 

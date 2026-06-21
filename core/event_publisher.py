@@ -57,11 +57,17 @@ class EventPublisher(ABC):
         self, *, request_id: str, subtype: str = "success", **extra: Any
     ) -> None: ...
 
+    @abstractmethod
+    def close(self) -> None: ...
+
 
 class StdioPublisher(EventPublisher):
     def _write(self, frame: OutgoingFrame) -> None:
         sys.stdout.write(json.dumps(frame_to_dict(frame), default=str) + "\n")
         sys.stdout.flush()
+
+    def close(self) -> None:
+        pass
 
     def publish_system_init(
         self, *, session_id: str, model: str, tools: Optional[list[dict[str, Any]]] = None
