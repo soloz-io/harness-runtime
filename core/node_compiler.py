@@ -13,6 +13,8 @@ try:
     from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
     from langchain.agents import create_agent
     from langchain.agents.middleware import HumanInTheLoopMiddleware, TodoListMiddleware
+
+    from core.ask_user import AskUserMiddleware
 except ImportError as e:
     raise ImportError(
         "deepagents package is required but not installed. "
@@ -35,6 +37,7 @@ def build_node_middleware(
     middleware: list[Any] = [
         TodoListMiddleware(),
         FilesystemMiddleware(),
+        AskUserMiddleware(),
         PatchToolCallsMiddleware(),
     ]
     interrupt_on_config = node_config.get("interrupt_on")

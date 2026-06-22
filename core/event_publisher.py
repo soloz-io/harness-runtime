@@ -1,3 +1,9 @@
+"""Event publisher for streaming agent execution events to clients.
+
+Provides abstract + concrete publishers (Redis, console) that emit
+tool calls, model responses, interrupts, and errors during graph execution.
+"""
+
 import json
 import sys
 from abc import ABC, abstractmethod

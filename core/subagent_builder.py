@@ -30,6 +30,7 @@ try:
     from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
     from langchain.agents import create_agent
 
+    from core.ask_user import AskUserMiddleware
     from core.state_schema_builder import create_state_schema_from_config
 
     DEEPAGENTS_AVAILABLE = True
@@ -227,6 +228,7 @@ def _build_compiled_subagent(
     middleware_stack.extend(
         [
             FilesystemMiddleware(),  # type: ignore
+            AskUserMiddleware(),  # type: ignore
             PatchToolCallsMiddleware(),  # type: ignore
         ]
     )

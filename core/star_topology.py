@@ -1,5 +1,5 @@
 """
-Start Topology Builder.
+Star Topology Builder.
 
 Compiles a native LangGraph StateGraph from definition JSON edges,
 using deepagents create_deep_agent (star topology with an orchestrator).
@@ -10,6 +10,7 @@ from typing import Any, Dict, List
 import structlog
 from langchain_core.runnables import Runnable
 
+from core.ask_user import AskUserMiddleware
 from core.interfaces import TopologyBuilder
 from core.rubric_middleware import build_rubric_middlewares
 from core.structured_output import build_tool_strategy, resolve_structured_output_model
@@ -26,8 +27,8 @@ except ImportError as e:
 logger = structlog.get_logger(__name__)
 
 
-class StartTopologyBuilder(TopologyBuilder):
-    """Builds a start (star) topology using an orchestrator and subagents."""
+class StarTopologyBuilder(TopologyBuilder):
+    """Builds a star topology using an orchestrator and subagents."""
 
     def build(
         self,
@@ -139,6 +140,7 @@ class StartTopologyBuilder(TopologyBuilder):
 
         # Build middlewares starting with Rubric if configured
         middleware_stack = build_rubric_middlewares(rubric_config, deep_agent_kwargs["model"])
+        middleware_stack.append(AskUserMiddleware())
         if middleware_stack:
             deep_agent_kwargs["middleware"] = middleware_stack
 

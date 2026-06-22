@@ -1,3 +1,9 @@
+"""Session lifecycle — manages agent session state and turn execution.
+
+Creates the agent graph on first invocation, persists messages across
+turns, and delegates to executor.py for run/stream logic.
+"""
+
 import uuid
 from typing import Any, Optional
 

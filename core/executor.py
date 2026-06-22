@@ -1,3 +1,10 @@
+"""Agent graph executor — runs compiled LangGraph agent and streams events.
+
+Orchestrates the execution loop: invokes the compiled graph, detects
+interrupts, publishes events via the event publisher, and handles
+resume via Command(resume=...).
+"""
+
 import json
 import time
 import uuid

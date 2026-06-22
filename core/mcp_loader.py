@@ -1,3 +1,9 @@
+"""MCP tool loader — connects to MCP servers and loads tools dynamically.
+
+Discovers MCP servers from agent definition config, establishes SSE or
+stdio connections, and loads available tools as LangChain BaseTool instances.
+"""
+
 import asyncio
 from contextlib import AsyncExitStack
 from typing import Any
