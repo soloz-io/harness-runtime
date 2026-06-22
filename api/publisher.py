@@ -222,16 +222,27 @@ class SSEEventPublisher(EventPublisher):
                     )
                 )
 
-                self._write(
-                    self._protocol_event(
-                        "tools",
-                        {
-                            "event": "tool-finished",
-                            "tool_call_id": tool_call_id,
-                            "output": None,
-                        },
-                    )
-                )
+    def publish_tool_result(
+        self,
+        *,
+        session_id: str,
+        tool_call_id: str,
+        tool_name: str,
+        content: str,
+        is_error: bool = False,
+    ) -> None:
+        self._write(
+            self._protocol_event(
+                "tools",
+                {
+                    "event": "tool-finished",
+                    "tool_call_id": tool_call_id,
+                    "tool_name": tool_name,
+                    "output": content,
+                    "is_error": is_error,
+                },
+            )
+        )
 
     def publish_user_echo(self, *, session_id: str, content: list[dict[str, Any]]) -> None:
         pass

@@ -50,6 +50,17 @@ class EventPublisher(ABC):
     def publish_user_echo(self, *, session_id: str, content: list[dict[str, Any]]) -> None: ...
 
     @abstractmethod
+    def publish_tool_result(
+        self,
+        *,
+        session_id: str,
+        tool_call_id: str,
+        tool_name: str,
+        content: str,
+        is_error: bool = False,
+    ) -> None: ...
+
+    @abstractmethod
     def publish_stream_event_text(self, *, session_id: str, text: str, index: int = 0) -> None: ...
 
     @abstractmethod
@@ -134,6 +145,17 @@ class StdioPublisher(EventPublisher):
                 content=content,
             )
         )
+
+    def publish_tool_result(
+        self,
+        *,
+        session_id: str,
+        tool_call_id: str,
+        tool_name: str,
+        content: str,
+        is_error: bool = False,
+    ) -> None:
+        pass
 
     def publish_stream_event_text(self, *, session_id: str, text: str, index: int = 0) -> None:
         self._write(

@@ -46,6 +46,13 @@ def _create_model_for_provider(
     """Create the appropriate LLM model based on provider and model name."""
     kwargs: dict[str, Any] = {"model": model_name, "api_key": api_key, **extra_kwargs}
 
+    timeout_seconds = os.environ.get("LLM_TIMEOUT_SECONDS")
+    if timeout_seconds is not None:
+        kwargs["timeout"] = int(timeout_seconds)
+    max_retries = os.environ.get("LLM_MAX_RETRIES")
+    if max_retries is not None:
+        kwargs["max_retries"] = int(max_retries)
+
     if provider == "anthropic":
         from langchain_anthropic import ChatAnthropic
 

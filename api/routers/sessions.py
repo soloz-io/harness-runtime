@@ -148,7 +148,8 @@ async def stream_events(session_id: Optional[str] = None) -> EventSourceResponse
         while True:
             try:
                 result = await r.xread({key: last_id}, count=10, block=2000)
-            except Exception:
+            except Exception as e:
+                logger.warning("event_xread_error", error=str(e))
                 await asyncio.sleep(0.5)
                 continue
 
@@ -160,8 +161,31 @@ async def stream_events(session_id: Optional[str] = None) -> EventSourceResponse
                 for entry_id, fields in entries:
                     data_raw = fields.get(b"data", b"")
                     if data_raw == _SENTINEL:
+                        logger.info("event_stream_sentinel_received", session_id=resolved_id)
                         return
-                    yield {"event": "message", "data": data_raw.decode("utf-8")}
+                    data_str = data_raw.decode("utf-8")
+                    import json
+
+                    try:
+                        parsed = json.loads(data_str)
+                        method = parsed.get("method", "unknown")
+                        seq = parsed.get("seq", -1)
+
+                        summary = data_str[:200]
+                        logger.info(
+                            "event_forwarded",
+                            session_id=resolved_id,
+                            method=method,
+                            seq=seq,
+                            data_preview=summary,
+                        )
+                    except (json.JSONDecodeError, TypeError):
+                        logger.info(
+                            "event_forwarded_raw",
+                            session_id=resolved_id,
+                            data_preview=data_str[:200],
+                        )
+                    yield {"event": "message", "data": data_str}
                     last_id = entry_id
 
     return EventSourceResponse(event_generator())

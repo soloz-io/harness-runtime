@@ -247,6 +247,7 @@ class ExecutionManager:
                                         tool_call_id = getattr(
                                             msg, "tool_call_id", f"call_{uuid.uuid4().hex[:12]}"
                                         )
+                                        tool_name = getattr(msg, "name", "unknown")
                                         tool_content = _serialize_content(
                                             getattr(msg, "content", "")
                                         )
@@ -255,16 +256,12 @@ class ExecutionManager:
                                                 "is_error", False
                                             )
                                         )
-                                        publisher.publish_user_echo(
+                                        publisher.publish_tool_result(
                                             session_id=session_id,
-                                            content=[
-                                                {
-                                                    "type": "tool_result",
-                                                    "tool_use_id": tool_call_id,
-                                                    "content": tool_content,
-                                                    "is_error": is_error,
-                                                }
-                                            ],
+                                            tool_call_id=tool_call_id,
+                                            tool_name=tool_name,
+                                            content=tool_content,
+                                            is_error=is_error,
                                         )
                             final_messages = msgs
                             # Emit values channel with current messages snapshot
@@ -450,6 +447,7 @@ class ExecutionManager:
                                         tool_call_id = getattr(
                                             msg, "tool_call_id", f"call_{uuid.uuid4().hex[:12]}"
                                         )
+                                        tool_name = getattr(msg, "name", "unknown")
                                         tool_content = _serialize_content(
                                             getattr(msg, "content", "")
                                         )
@@ -458,16 +456,12 @@ class ExecutionManager:
                                                 "is_error", False
                                             )
                                         )
-                                        self.publisher.publish_user_echo(
+                                        self.publisher.publish_tool_result(
                                             session_id=session_id,
-                                            content=[
-                                                {
-                                                    "type": "tool_result",
-                                                    "tool_use_id": tool_call_id,
-                                                    "content": tool_content,
-                                                    "is_error": is_error,
-                                                }
-                                            ],
+                                            tool_call_id=tool_call_id,
+                                            tool_name=tool_name,
+                                            content=tool_content,
+                                            is_error=is_error,
                                         )
                             final_messages = msgs
                             serialized_msgs = _serialize_messages_for_values(final_messages)
