@@ -1,5 +1,4 @@
 import asyncio
-import json
 import os
 import time
 import traceback
@@ -142,11 +141,6 @@ async def stream_events(session_id: Optional[str] = None) -> EventSourceResponse
     resolved_id = session_id or list(_session_store.keys())[-1]
 
     async def event_generator() -> AsyncGenerator[dict[str, Any], None]:
-        yield {
-            "event": "message",
-            "data": json.dumps({"type": "connected", "session_id": resolved_id}),
-        }
-
         r = aioredis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379/0"))
         key = _stream_key(resolved_id)
         last_id = "0"

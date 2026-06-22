@@ -17,6 +17,21 @@ from models.frames import (
 
 class EventPublisher(ABC):
     @abstractmethod
+    def publish_lifecycle_started(self, *, session_id: str, node: Optional[str] = None) -> None: ...
+
+    @abstractmethod
+    def publish_lifecycle_completed(self, *, session_id: str) -> None: ...
+
+    @abstractmethod
+    def publish_lifecycle_failed(self, *, session_id: str, error: str) -> None: ...
+
+    @abstractmethod
+    def publish_checkpoint(self, *, session_id: str) -> None: ...
+
+    @abstractmethod
+    def publish_values(self, *, session_id: str, messages: list[dict[str, Any]]) -> None: ...
+
+    @abstractmethod
     def publish_system_init(
         self, *, session_id: str, model: str, tools: Optional[list[dict[str, Any]]] = None
     ) -> None: ...
@@ -67,6 +82,21 @@ class StdioPublisher(EventPublisher):
         sys.stdout.flush()
 
     def close(self) -> None:
+        pass
+
+    def publish_lifecycle_started(self, *, session_id: str, node: Optional[str] = None) -> None:
+        pass
+
+    def publish_lifecycle_completed(self, *, session_id: str) -> None:
+        pass
+
+    def publish_lifecycle_failed(self, *, session_id: str, error: str) -> None:
+        pass
+
+    def publish_checkpoint(self, *, session_id: str) -> None:
+        pass
+
+    def publish_values(self, *, session_id: str, messages: list[dict[str, Any]]) -> None:
         pass
 
     def publish_system_init(

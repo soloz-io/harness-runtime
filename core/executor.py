@@ -141,6 +141,8 @@ class ExecutionManager:
                 tools=tools,
             )
 
+            publisher.publish_lifecycle_started(session_id=session_id)
+
             if resume_payload is not None:
                 from langgraph.types import Command
 
@@ -198,6 +200,7 @@ class ExecutionManager:
                                     content=[{"type": "text", "text": remaining}],
                                 )
                             duration_ms = int((time.time() - start_time) * 1000)
+                            publisher.publish_lifecycle_completed(session_id=session_id)
                             publisher.publish_result(
                                 session_id=session_id,
                                 subtype="interrupted",
@@ -264,6 +267,14 @@ class ExecutionManager:
                                             ],
                                         )
                             final_messages = msgs
+                            # Emit values channel with current messages snapshot
+                            serialized_msgs = _serialize_messages_for_values(final_messages)
+                            if serialized_msgs:
+                                publisher.publish_checkpoint(session_id=session_id)
+                                publisher.publish_values(
+                                    session_id=session_id,
+                                    messages=serialized_msgs,
+                                )
                         if "structured_response" in data:
                             last_structured_response = data["structured_response"]
                         state_files = data.get("files")
@@ -282,6 +293,7 @@ class ExecutionManager:
             final_text = _extract_final_text(final_messages) or remaining
             duration_ms = int((time.time() - start_time) * 1000)
 
+            publisher.publish_lifecycle_completed(session_id=session_id)
             publisher.publish_result(
                 session_id=session_id,
                 subtype="success",
@@ -297,6 +309,7 @@ class ExecutionManager:
         except Exception as e:
             duration_ms = int((time.time() - start_time) * 1000)
             logger.error("graph_execution_failed", error=str(e))
+            publisher.publish_lifecycle_failed(session_id=session_id, error=str(e))
             publisher.publish_result(
                 session_id=session_id,
                 subtype="error_during_execution",
@@ -332,6 +345,8 @@ class ExecutionManager:
                 model=model_name,
                 tools=tools,
             )
+
+            self.publisher.publish_lifecycle_started(session_id=session_id)
 
             if resume_payload is not None:
                 from langgraph.types import Command
@@ -388,6 +403,7 @@ class ExecutionManager:
                                     content=[{"type": "text", "text": remaining}],
                                 )
                             duration_ms = int((time.time() - start_time) * 1000)
+                            self.publisher.publish_lifecycle_completed(session_id=session_id)
                             self.publisher.publish_result(
                                 session_id=session_id,
                                 subtype="interrupted",
@@ -454,6 +470,13 @@ class ExecutionManager:
                                             ],
                                         )
                             final_messages = msgs
+                            serialized_msgs = _serialize_messages_for_values(final_messages)
+                            if serialized_msgs:
+                                self.publisher.publish_checkpoint(session_id=session_id)
+                                self.publisher.publish_values(
+                                    session_id=session_id,
+                                    messages=serialized_msgs,
+                                )
                         if "structured_response" in data:
                             last_structured_response = data["structured_response"]
                         state_files = data.get("files")
@@ -472,6 +495,21 @@ class ExecutionManager:
             final_text = _extract_final_text(final_messages) or remaining
             duration_ms = int((time.time() - start_time) * 1000)
 
+            self.publisher.publish_lifecycle_completed(session_id=session_id)
+            self.publisher.publish_result(
+                session_id=session_id,
+                subtype="success",
+                duration_ms=duration_ms,
+                num_turns=num_turns,
+                result=final_text,
+                structured_response=last_structured_response,
+                files=last_files if last_files else None,
+            )
+
+            final_text = _extract_final_text(final_messages) or remaining
+            duration_ms = int((time.time() - start_time) * 1000)
+
+            self.publisher.publish_lifecycle_completed(session_id=session_id)
             self.publisher.publish_result(
                 session_id=session_id,
                 subtype="success",
@@ -487,6 +525,7 @@ class ExecutionManager:
         except Exception as e:
             duration_ms = int((time.time() - start_time) * 1000)
             logger.error("graph_execution_failed", error=str(e))
+            self.publisher.publish_lifecycle_failed(session_id=session_id, error=str(e))
             self.publisher.publish_result(
                 session_id=session_id,
                 subtype="error_during_execution",
@@ -558,3 +597,27 @@ def _extract_final_text(messages: list) -> str:
             content = last.content
             return content if isinstance(content, str) else str(content)
     return ""
+
+
+def _serialize_messages_for_values(messages: list) -> list[dict[str, Any]]:
+    serialized: list[dict[str, Any]] = []
+    for msg in messages:
+        entry: dict[str, Any] = {
+            "id": getattr(msg, "id", str(id(msg))),
+            "type": getattr(msg, "type", "unknown"),
+        }
+        content = getattr(msg, "content", "")
+        if isinstance(content, str):
+            entry["content"] = content
+        elif isinstance(content, list):
+            entry["content"] = content
+        else:
+            entry["content"] = str(content)
+        tool_calls = getattr(msg, "tool_calls", [])
+        if tool_calls:
+            entry["tool_calls"] = tool_calls
+        additional_kwargs = getattr(msg, "additional_kwargs", {})
+        if additional_kwargs:
+            entry["additional_kwargs"] = additional_kwargs
+        serialized.append(entry)
+    return serialized
