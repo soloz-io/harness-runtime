@@ -151,48 +151,76 @@ async def stream_events(
         r = aioredis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379/0"))
         key = _stream_key(resolved_id)
         last_id = last_event_id
+        try:
+            while True:
+                try:
+                    result = await r.xread({key: last_id}, count=10, block=2000)
+                except asyncio.CancelledError:
+                    logger.warning(
+                        "event_generator_cancelled", session_id=resolved_id, last_id=last_id
+                    )
+                    raise
+                except Exception as e:
+                    logger.warning("event_xread_error", error=str(e))
+                    await asyncio.sleep(0.5)
+                    continue
 
-        while True:
+                if not result:
+                    yield {"event": "ping", "data": ""}
+                    continue
+
+                for _stream_name, entries in result:
+                    for entry_id, fields in entries:
+                        data_raw = fields.get(b"data", b"")
+                        if data_raw == _SENTINEL:
+                            logger.info("event_stream_sentinel_received", session_id=resolved_id)
+                            return
+                        data_str = data_raw.decode("utf-8")
+                        import json
+
+                        try:
+                            parsed = json.loads(data_str)
+                            method = parsed.get("method", "unknown")
+                            seq = parsed.get("seq", -1)
+
+                            summary = data_str[:200]
+                            logger.info(
+                                "event_forwarded",
+                                session_id=resolved_id,
+                                method=method,
+                                seq=seq,
+                                data_preview=summary,
+                            )
+                        except (json.JSONDecodeError, TypeError):
+                            logger.info(
+                                "event_forwarded_raw",
+                                session_id=resolved_id,
+                                data_preview=data_str[:200],
+                            )
+                        entry_id_str = (
+                            entry_id.decode("utf-8")
+                            if isinstance(entry_id, bytes)
+                            else str(entry_id)
+                        )
+                        yield {"event": "message", "data": data_str, "id": entry_id_str}
+                        last_id = entry_id_str
+        except asyncio.CancelledError:
+            logger.warning(
+                "event_generator_cancelled_outer",
+                session_id=resolved_id,
+                last_id=last_id,
+            )
+            raise
+        finally:
+            logger.info(
+                "event_generator_exit",
+                session_id=resolved_id,
+                last_id=last_id,
+                has_stream=r is not None,
+            )
             try:
-                result = await r.xread({key: last_id}, count=10, block=2000)
-            except Exception as e:
-                logger.warning("event_xread_error", error=str(e))
-                await asyncio.sleep(0.5)
-                continue
-
-            if not result:
-                yield {"event": "ping", "data": ""}
-                continue
-
-            for _stream_name, entries in result:
-                for entry_id, fields in entries:
-                    data_raw = fields.get(b"data", b"")
-                    if data_raw == _SENTINEL:
-                        logger.info("event_stream_sentinel_received", session_id=resolved_id)
-                        return
-                    data_str = data_raw.decode("utf-8")
-                    import json
-
-                    try:
-                        parsed = json.loads(data_str)
-                        method = parsed.get("method", "unknown")
-                        seq = parsed.get("seq", -1)
-
-                        summary = data_str[:200]
-                        logger.info(
-                            "event_forwarded",
-                            session_id=resolved_id,
-                            method=method,
-                            seq=seq,
-                            data_preview=summary,
-                        )
-                    except (json.JSONDecodeError, TypeError):
-                        logger.info(
-                            "event_forwarded_raw",
-                            session_id=resolved_id,
-                            data_preview=data_str[:200],
-                        )
-                    yield {"event": "message", "data": data_str, "id": entry_id}
-                    last_id = entry_id
+                await r.aclose()
+            except Exception:
+                pass
 
     return EventSourceResponse(event_generator())

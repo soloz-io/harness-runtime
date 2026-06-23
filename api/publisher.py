@@ -4,8 +4,11 @@ import uuid
 from typing import Any, Optional
 
 import redis
+import structlog
 
 from core.event_publisher import EventPublisher
+
+logger = structlog.get_logger(__name__)
 
 _redis_client: Optional[redis.Redis] = None
 _SENTINEL = b"\x00end\x00"
@@ -48,8 +51,11 @@ class SSEEventPublisher(EventPublisher):
     def _write(self, data: dict[str, Any]) -> None:
         if self._closed:
             return
-        r = get_redis_client()
-        r.xadd(self._stream_key, {"data": json.dumps(data, default=str)})
+        try:
+            r = get_redis_client()
+            r.xadd(self._stream_key, {"data": json.dumps(data, default=str)})
+        except Exception as e:
+            logger.error("redis_xadd_failed", error=str(e), stream_key=self._stream_key)
 
     def _protocol_event(self, method: str, data: dict[str, Any]) -> dict[str, Any]:
         return {
