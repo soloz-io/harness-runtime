@@ -222,6 +222,26 @@ class SSEEventPublisher(EventPublisher):
                     )
                 )
 
+    def publish_tool_output_delta(
+        self,
+        *,
+        session_id: str,
+        tool_call_id: str,
+        tool_name: str,
+        delta: str,
+    ) -> None:
+        self._write(
+            self._protocol_event(
+                "tools",
+                {
+                    "event": "tool-output-delta",
+                    "tool_call_id": tool_call_id,
+                    "tool_name": tool_name,
+                    "delta": delta,
+                },
+            )
+        )
+
     def publish_tool_result(
         self,
         *,
@@ -243,6 +263,32 @@ class SSEEventPublisher(EventPublisher):
                 },
             )
         )
+
+    def publish_message_finish(self) -> None:
+        if self._block_started:
+            self._block_started = False
+            self._write(
+                self._protocol_event(
+                    "messages",
+                    {
+                        "event": "content-block-finish",
+                        "index": self._block_index,
+                        "content": {"type": "text", "text": ""},
+                    },
+                )
+            )
+        if self._message_started:
+            self._write(
+                self._protocol_event(
+                    "messages",
+                    {
+                        "event": "message-finish",
+                    },
+                )
+            )
+        self._message_started = False
+        self._block_started = False
+        self._block_index = 0
 
     def publish_user_echo(self, *, session_id: str, content: list[dict[str, Any]]) -> None:
         pass

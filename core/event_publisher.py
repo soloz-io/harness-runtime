@@ -92,6 +92,14 @@ class EventPublisher(ABC):
     @abstractmethod
     def close(self) -> None: ...
 
+    def publish_message_finish(self) -> None:  # noqa: B027
+        """Finalize the current message and reset streaming state.
+
+        Closes any open content block, emits message-finish, and resets
+        internal state so the next ``publish_stream_event_text`` call
+        starts a fresh message. Default no-op.
+        """
+
 
 class StdioPublisher(EventPublisher):
     def _write(self, frame: OutgoingFrame) -> None:

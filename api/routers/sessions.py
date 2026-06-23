@@ -95,6 +95,10 @@ async def handle_message(session_id: str, body: dict[str, Any]) -> dict[str, Any
         state = _session_store[session_id]
         if resume_payload:
             state.session.initialize(resume_payload=resume_payload)
+            # Create a fresh publisher for the resumed turn — the old one was closed
+            # when the first turn completed (sentinel written). A new publisher ensures
+            # events from the resumed turn reach Redis Streams.
+            state.publisher = SSEEventPublisher(session_id)
     else:
         publisher = SSEEventPublisher(session_id)
         if not _execution_manager:
@@ -122,7 +126,10 @@ async def handle_message(session_id: str, body: dict[str, Any]) -> dict[str, Any
 
 
 @router.get("/event")
-async def stream_events(session_id: Optional[str] = None) -> EventSourceResponse:
+async def stream_events(
+    session_id: Optional[str] = None,
+    last_event_id: str = "0",
+) -> EventSourceResponse:
     if session_id:
         deadline = time.time() + 30
         while session_id not in _session_store:
@@ -143,7 +150,7 @@ async def stream_events(session_id: Optional[str] = None) -> EventSourceResponse
     async def event_generator() -> AsyncGenerator[dict[str, Any], None]:
         r = aioredis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379/0"))
         key = _stream_key(resolved_id)
-        last_id = "0"
+        last_id = last_event_id
 
         while True:
             try:
@@ -185,7 +192,7 @@ async def stream_events(session_id: Optional[str] = None) -> EventSourceResponse
                             session_id=resolved_id,
                             data_preview=data_str[:200],
                         )
-                    yield {"event": "message", "data": data_str}
+                    yield {"event": "message", "data": data_str, "id": entry_id}
                     last_id = entry_id
 
     return EventSourceResponse(event_generator())

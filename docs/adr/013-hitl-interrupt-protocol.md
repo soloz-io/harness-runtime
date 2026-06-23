@@ -46,28 +46,26 @@ The four `allowed_decisions` serve distinct purposes:
 
 ### `ask_user` tool contract
 
-The `ask_user` tool defines its schema for the LLM with three parameters:
+The `ask_user` tool defines its schema for the LLM with a single parameter:
 
 ```python
 @tool("ask_user")
-def ask_user(question: str, options: list[str] | None = None, blocking: bool = False) -> str:
-    """Relay a question to the user and wait for their response."""
+def ask_user(questions: list[AskUserQuestion]) -> str:
+    """Relay questions to the user and wait for their response."""
 ```
 
-- `question`: The prompt presented to the human in the UI
-- `options`: Optional predefined choices rendered as buttons
-- `blocking`: Hint for the UI — `True` means the workflow cannot proceed without an answer
+- `questions`: Array of question objects. Each item has `question` (str), optional `options` (list[str]), and optional `blocking` (bool).
 
 The tool body is a no-op. The `respond` decision ensures the human's text becomes the return value.
 
 ### Interrupt lifecycle
 
 ```
-LLM calls ask_user(...)
+LLM calls ask_user(questions=[{question: "...", options: [...], blocking: true}, ...])
   → HumanInTheLoopMiddleware intercepts (tool call is in interrupt_on)
   → Agent execution pauses
   → Runtime emits interrupt event to SDK/UI:
-      { action_requests: [{ name: "ask_user", args: { question, options, blocking } }],
+      { action_requests: [{ name: "ask_user", args: { questions: [{question: "...", options: [...], blocking: true}] } }],
         review_configs: [{ action_name: "ask_user", allowed_decisions: ["respond"] }] }
   → Human submits response via UI
   → SDK sends Command(resume={ decisions: [{ type: "respond", message: "..." }] })

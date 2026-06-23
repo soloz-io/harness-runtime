@@ -3,13 +3,18 @@
 Orchestrates the execution loop: invokes the compiled graph, detects
 interrupts, publishes events via the event publisher, and handles
 resume via Command(resume=...).
+
+Uses ``stream_events(version="v3")`` (deepagents-native streaming
+protocol) instead of raw ``stream(stream_mode=["values", "messages"])``
+so that specialist subagent content arrives as real-time token deltas
+rather than post-hoc 60-character chunks.
 """
 
 import json
 import time
 import uuid
 from contextlib import _GeneratorContextManager
-from typing import Any, Optional, cast
+from typing import Any, Optional
 
 import structlog
 from deepagents.middleware.filesystem import FilesystemMiddleware
@@ -118,6 +123,379 @@ class ExecutionManager:
             logger.error("async_checkpointer_setup_failed", error=str(e))
             raise
 
+    # ------------------------------------------------------------------
+    # Shared v3 event helpers
+    # ------------------------------------------------------------------
+
+    def _handle_initial_setup(
+        self,
+        publisher: EventPublisher,
+        session_id: str,
+        model_name: str,
+        agent_definition: Optional[dict[str, Any]],
+    ) -> None:
+        tools = _compute_tools(agent_definition) if agent_definition else []
+        publisher.publish_system_init(
+            session_id=session_id,
+            model=model_name,
+            tools=tools,
+        )
+        publisher.publish_lifecycle_started(session_id=session_id)
+
+    def _make_stream_input(
+        self,
+        input_payload: dict[str, Any],
+        resume_payload: Optional[Any],
+    ) -> Any:
+        if resume_payload is not None:
+            from langgraph.types import Command
+
+            return Command(resume=resume_payload)
+        return input_payload
+
+    def _process_v3_event(
+        self,
+        event: dict[str, Any],
+        state: dict[str, Any],
+        publisher: EventPublisher,
+        session_id: str,
+        model_name: str,
+        start_time: float,
+        num_turns: int,
+    ) -> bool:
+        """Process a single ProtocolEvent from stream_events(v3).
+
+        Returns True if execution should continue, False if interrupted/ended.
+        """
+        method = event["method"]
+        params = event["params"]
+        ns = tuple(params["namespace"])
+        data = params["data"]
+
+        # --- Lifecycle events -> build namespace mapping ---
+        if method == "lifecycle":
+            self._handle_lifecycle(data, state, session_id, publisher, model_name)
+            return True
+
+        # --- Subagent events -> route content as tool-output-delta ---
+        if ns:
+            if method == "messages":
+                self._handle_subagent_message(data, ns, state, publisher, session_id)
+            return True
+
+        # --- Root (coordinator) events ---
+
+        if method == "messages":
+            return self._handle_root_message(
+                data, state, publisher, session_id, model_name, start_time, num_turns
+            )
+
+        if method == "tools":
+            self._handle_root_tools(data, state, publisher, session_id)
+            return True
+
+        if method == "values":
+            self._handle_root_values(data, state, publisher, session_id, start_time, num_turns)
+            # If __interrupt__ was set we stop the run
+            if state.get("_interrupted"):
+                return False
+            return True
+
+        return True
+
+    def _handle_lifecycle(
+        self,
+        data: dict[str, Any],
+        state: dict[str, Any],
+        session_id: str,
+        publisher: EventPublisher,
+        model_name: str,
+    ) -> None:
+        """Record namespace->tool_call_id mapping from lifecycle events."""
+        if data.get("event") == "started":
+            ns_list = data.get("namespace")
+            cause = data.get("cause")
+            if (
+                isinstance(ns_list, list)
+                and isinstance(cause, dict)
+                and cause.get("type") == "toolCall"
+            ):
+                tool_call_id = cause.get("tool_call_id")
+                if tool_call_id:
+                    ns_tuple = tuple(ns_list)
+                    state["ns_to_tool_call"][ns_tuple] = tool_call_id
+                    state["subagent_names"][ns_tuple] = data.get("graph_name", "task")
+                    logger.debug(
+                        "subagent_started",
+                        namespace=ns_list,
+                        tool_call_id=tool_call_id,
+                    )
+
+    def _handle_subagent_message(
+        self,
+        data: Any,
+        ns: tuple[str, ...],
+        state: dict[str, Any],
+        publisher: EventPublisher,
+        session_id: str,
+    ) -> None:
+        """Route subagent content-block-delta as tool-output-delta."""
+        tool_call_id = state["ns_to_tool_call"].get(ns)
+        if not tool_call_id:
+            return
+        subagent_name = state["subagent_names"].get(ns, "task")
+        payload, _metadata = data if isinstance(data, tuple) else (data, {})
+        if not isinstance(payload, dict):
+            return
+        event_type = payload.get("event")
+        if event_type == "content-block-delta":
+            delta = payload.get("delta", {})
+            text = delta.get("text", "") if isinstance(delta, dict) else ""
+            if text:
+                publisher.publish_tool_output_delta(
+                    session_id=session_id,
+                    tool_call_id=tool_call_id,
+                    tool_name=subagent_name,
+                    delta=text,
+                )
+
+    def _handle_root_message(
+        self,
+        data: Any,
+        state: dict[str, Any],
+        publisher: EventPublisher,
+        session_id: str,
+        model_name: str,
+        start_time: float,
+        num_turns: int,
+    ) -> bool:
+        """Handle coordinator messages events.
+
+        - content-block-delta (text) -> publish_stream_event_text
+        - content-block-start (tool_call) -> record tool_use block
+        - message-finish -> publish assistant + reset message state
+        """
+        payload, _metadata = data if isinstance(data, tuple) else (data, {})
+        if not isinstance(payload, dict):
+            return True
+        event_type = payload.get("event")
+
+        if event_type == "content-block-delta":
+            delta = payload.get("delta", {})
+            text = delta.get("text", "") if isinstance(delta, dict) else ""
+            if text:
+                state["streamed_text"] += text
+                publisher.publish_stream_event_text(
+                    session_id=session_id,
+                    text=text,
+                )
+
+        elif event_type == "content-block-start":
+            content = payload.get("content", {})
+            if isinstance(content, dict) and content.get("type") == "tool_call":
+                state["current_tool_use_blocks"].append(
+                    {
+                        "type": "tool_use",
+                        "id": content.get("id", f"call_{uuid.uuid4().hex[:12]}"),
+                        "name": content.get("name", "unknown"),
+                        "input": content.get("args", content.get("input", {})),
+                    }
+                )
+
+        elif event_type == "message-finish":
+            streamed_text = state.get("streamed_text", "")
+            blocks = state["current_tool_use_blocks"]
+            if blocks:
+                publisher.publish_assistant(
+                    session_id=session_id,
+                    model=model_name,
+                    content=[{"type": "text", "text": streamed_text or ""}] + blocks,
+                )
+            state["current_tool_use_blocks"] = []
+            publisher.publish_message_finish()
+
+        return True
+
+    def _handle_root_tools(
+        self,
+        data: dict[str, Any],
+        state: dict[str, Any],
+        publisher: EventPublisher,
+        session_id: str,
+    ) -> None:
+        """Handle coordinator tools events (tool-finished for non-task tools)."""
+        event_type = data.get("event")
+        tool_call_id = data.get("tool_call_id")
+        if not tool_call_id:
+            return
+
+        if event_type == "tool-output-delta":
+            delta = data.get("delta", "")
+            if delta:
+                publisher.publish_tool_output_delta(
+                    session_id=session_id,
+                    tool_call_id=tool_call_id,
+                    tool_name=data.get("tool_name", "unknown"),
+                    delta=delta,
+                )
+
+        elif event_type == "tool-finished":
+            publisher.publish_tool_result(
+                session_id=session_id,
+                tool_call_id=tool_call_id,
+                tool_name=data.get("tool_name", "unknown"),
+                content=_serialize_content(data.get("output", "")),
+                is_error=bool(data.get("is_error", False)),
+            )
+
+    def _handle_root_values(
+        self,
+        data: dict[str, Any],
+        state: dict[str, Any],
+        publisher: EventPublisher,
+        session_id: str,
+        start_time: float,
+        num_turns: int,
+    ) -> None:
+        """Handle values events.
+
+        - Interrupt detection
+        - structured_response / files extraction
+        - values channel publishing (only when messages change)
+        """
+        if not isinstance(data, dict):
+            return
+
+        # Interrupt detection
+        interrupt_val = data.get("__interrupt__")
+        if interrupt_val is not None:
+            self._handle_interrupt(
+                interrupt_val,
+                state,
+                publisher,
+                session_id,
+                start_time,
+                num_turns,
+            )
+            return
+
+        # Extract structured_response and files
+        if "structured_response" in data:
+            state["last_structured_response"] = data["structured_response"]
+        state_files = data.get("files")
+        if state_files:
+            state["last_files"].update(state_files)
+
+        # Track messages for values channel
+        msgs = data.get("messages", [])
+        prev_count = state.get("_values_messages_count", 0)
+        if len(msgs) > prev_count:
+            state["_values_messages_count"] = len(msgs)
+            serialized_msgs = _serialize_messages_for_values(msgs)
+            if serialized_msgs:
+                publisher.publish_checkpoint(session_id=session_id)
+                publisher.publish_values(
+                    session_id=session_id,
+                    messages=serialized_msgs,
+                )
+
+    def _handle_interrupt(
+        self,
+        interrupt_val: Any,
+        state: dict[str, Any],
+        publisher: EventPublisher,
+        session_id: str,
+        start_time: float,
+        num_turns: int,
+    ) -> None:
+        """Handle an interrupt during graph execution."""
+        interrupt_payload = None
+        if isinstance(interrupt_val, (list, tuple)) and len(interrupt_val) > 0:
+            raw = interrupt_val[0]
+            if hasattr(raw, "value"):
+                interrupt_payload = raw.value
+            elif isinstance(raw, dict):
+                interrupt_payload = raw
+            else:
+                interrupt_payload = raw
+        remaining = state.get("streamed_text", "")
+        state["streamed_text"] = ""
+        if remaining:
+            publisher.publish_assistant(
+                session_id=session_id,
+                model="",
+                content=[{"type": "text", "text": remaining}],
+            )
+        duration_ms = int((time.time() - start_time) * 1000)
+        publisher.publish_lifecycle_completed(session_id=session_id)
+        publisher.publish_result(
+            session_id=session_id,
+            subtype="interrupted",
+            duration_ms=duration_ms,
+            num_turns=num_turns,
+            result=remaining or None,
+            interrupt=interrupt_payload,
+        )
+        state["_interrupted"] = True
+
+    def _publish_final_result(
+        self,
+        state: dict[str, Any],
+        publisher: EventPublisher,
+        session_id: str,
+        start_time: float,
+        num_turns: int,
+        is_error: bool = False,
+        error_str: str = "",
+    ) -> str:
+        """Publish the final result frame."""
+        duration_ms = int((time.time() - start_time) * 1000)
+        remaining = state.get("streamed_text", "")
+        if remaining and not is_error:
+            publisher.publish_assistant(
+                session_id=session_id,
+                model="",
+                content=[{"type": "text", "text": remaining}],
+            )
+        publisher.publish_message_finish()
+
+        if is_error:
+            publisher.publish_lifecycle_failed(session_id=session_id, error=error_str)
+            publisher.publish_result(
+                session_id=session_id,
+                subtype="error_during_execution",
+                duration_ms=duration_ms,
+                is_error=True,
+                result=error_str,
+            )
+            return ""
+
+        publisher.publish_lifecycle_completed(session_id=session_id)
+        final_text = remaining or ""
+        publisher.publish_result(
+            session_id=session_id,
+            subtype="success",
+            duration_ms=duration_ms,
+            num_turns=num_turns,
+            result=final_text,
+            structured_response=state.get("last_structured_response"),
+            files=state.get("last_files") or None,
+        )
+        return final_text
+
+    def _init_event_state(self) -> dict[str, Any]:
+        """Create the shared state dict for v3 event processing."""
+        return {
+            "streamed_text": "",
+            "current_tool_use_blocks": [],
+            "ns_to_tool_call": {},
+            "subagent_names": {},
+            "last_structured_response": None,
+            "last_files": {},
+            "_interrupted": False,
+            "_values_messages_count": 0,
+        }
+
     async def async_execute(
         self,
         graph: Runnable,
@@ -130,198 +508,61 @@ class ExecutionManager:
         resume_payload: Optional[Any] = None,
     ) -> str:
         start_time = time.time()
-        streamed_text = ""
-        final_messages: list[Any] = []
-        last_structured_response = None
-        last_files: dict[str, Any] = {}
-        published_message_ids: set[str] = set()
+        state = self._init_event_state()
 
         config: RunnableConfig = {"configurable": {"thread_id": session_id}}
         if self._async_checkpointer:
             config["configurable"]["checkpointer"] = self._async_checkpointer
 
         try:
-            tools = _compute_tools(agent_definition) if agent_definition else []
-            publisher.publish_system_init(
-                session_id=session_id,
-                model=model_name,
-                tools=tools,
+            self._handle_initial_setup(
+                publisher,
+                session_id,
+                model_name,
+                agent_definition,
             )
 
-            publisher.publish_lifecycle_started(session_id=session_id)
+            stream_input = self._make_stream_input(input_payload, resume_payload)
 
-            if resume_payload is not None:
-                from langgraph.types import Command
-
-                stream_input: Any = Command(resume=resume_payload)
-            else:
-                stream_input = input_payload
-
-            async for event in graph.astream(
-                stream_input, config, stream_mode=["values", "messages"]
-            ):
-                if not isinstance(event, tuple) or len(event) != 2:
+            run = await graph.astream_events(
+                stream_input,
+                config,
+                version="v3",
+            )
+            async for event in run:
+                if not isinstance(event, dict):
                     continue
-
-                mode, data = event
-
-                if mode == "messages":
-                    msg_chunk, _metadata = data
-                    if hasattr(msg_chunk, "content") and isinstance(msg_chunk.content, str):
-                        delta = msg_chunk.content
-                        if delta:
-                            streamed_text += delta
-                            publisher.publish_stream_event_text(
-                                session_id=session_id,
-                                text=delta,
-                            )
-
-                elif mode == "values":
-                    if isinstance(data, dict):
-                        interrupt_val = data.get("__interrupt__")
-                        if interrupt_val is not None:
-                            logger.info(
-                                "executor_interrupt_detected",
-                                interrupt_val_type=type(interrupt_val).__name__,
-                            )
-                            interrupt_payload = None
-                            if isinstance(interrupt_val, (list, tuple)) and len(interrupt_val) > 0:
-                                raw = interrupt_val[0]
-                                logger.info(
-                                    "executor_interrupt_raw",
-                                    raw_type=type(raw).__name__,
-                                    raw=str(raw)[:500],
-                                )
-                                if hasattr(raw, "value"):
-                                    interrupt_payload = raw.value
-                                elif isinstance(raw, dict):
-                                    interrupt_payload = raw
-                                else:
-                                    interrupt_payload = raw
-                            remaining = streamed_text
-                            streamed_text = ""
-                            if remaining:
-                                publisher.publish_assistant(
-                                    session_id=session_id,
-                                    model=model_name,
-                                    content=[{"type": "text", "text": remaining}],
-                                )
-                            duration_ms = int((time.time() - start_time) * 1000)
-                            publisher.publish_lifecycle_completed(session_id=session_id)
-                            publisher.publish_result(
-                                session_id=session_id,
-                                subtype="interrupted",
-                                duration_ms=duration_ms,
-                                num_turns=num_turns,
-                                result=remaining or None,
-                                interrupt=interrupt_payload,
-                            )
-                            return ""
-                        msgs: list[Any] = data.get("messages", [])
-                        if len(msgs) > len(final_messages):
-                            for msg in msgs[len(final_messages) :]:
-                                msg_id = getattr(msg, "id", None) or str(id(msg))
-                                if msg_id not in published_message_ids:
-                                    published_message_ids.add(msg_id)
-                                    msg_type = getattr(msg, "type", "")
-                                    if msg_type == "ai":
-                                        blocks: list[dict[str, Any]] = []
-                                        text = getattr(msg, "content", "") or ""
-                                        if isinstance(text, str) and text:
-                                            blocks.append({"type": "text", "text": text})
-                                        elif isinstance(text, list):
-                                            for b in text:
-                                                if isinstance(b, dict):
-                                                    blocks.append(b)
-                                        for tc in _extract_tool_calls(msg):
-                                            blocks.append(
-                                                {
-                                                    "type": "tool_use",
-                                                    "id": tc.get(
-                                                        "id", f"call_{uuid.uuid4().hex[:12]}"
-                                                    ),
-                                                    "name": tc.get("name", "unknown"),
-                                                    "input": tc.get("args", tc.get("input", {})),
-                                                }
-                                            )
-                                        if blocks:
-                                            publisher.publish_assistant(
-                                                session_id=session_id,
-                                                model=model_name,
-                                                content=blocks,
-                                            )
-                                    elif msg_type == "tool":
-                                        tool_call_id = getattr(
-                                            msg, "tool_call_id", f"call_{uuid.uuid4().hex[:12]}"
-                                        )
-                                        tool_name = getattr(msg, "name", "unknown")
-                                        tool_content = _serialize_content(
-                                            getattr(msg, "content", "")
-                                        )
-                                        is_error = getattr(msg, "is_error", False) or (
-                                            getattr(msg, "additional_kwargs", {}).get(
-                                                "is_error", False
-                                            )
-                                        )
-                                        publisher.publish_tool_result(
-                                            session_id=session_id,
-                                            tool_call_id=tool_call_id,
-                                            tool_name=tool_name,
-                                            content=tool_content,
-                                            is_error=is_error,
-                                        )
-                            final_messages = msgs
-                            # Emit values channel with current messages snapshot
-                            serialized_msgs = _serialize_messages_for_values(final_messages)
-                            if serialized_msgs:
-                                publisher.publish_checkpoint(session_id=session_id)
-                                publisher.publish_values(
-                                    session_id=session_id,
-                                    messages=serialized_msgs,
-                                )
-                        if "structured_response" in data:
-                            last_structured_response = data["structured_response"]
-                        state_files = data.get("files")
-                        if state_files:
-                            last_files.update(state_files)
-
-            remaining = streamed_text
-            streamed_text = ""
-            if remaining:
-                publisher.publish_assistant(
-                    session_id=session_id,
-                    model=model_name,
-                    content=[{"type": "text", "text": remaining}],
+                ok = self._process_v3_event(
+                    event,
+                    state,
+                    publisher,
+                    session_id,
+                    model_name,
+                    start_time,
+                    num_turns,
                 )
+                if not ok:
+                    return ""
 
-            final_text = _extract_final_text(final_messages) or remaining
-            duration_ms = int((time.time() - start_time) * 1000)
-
-            publisher.publish_lifecycle_completed(session_id=session_id)
-            publisher.publish_result(
-                session_id=session_id,
-                subtype="success",
-                duration_ms=duration_ms,
-                num_turns=num_turns,
-                result=final_text,
-                structured_response=last_structured_response,
-                files=last_files if last_files else None,
+            return self._publish_final_result(
+                state,
+                publisher,
+                session_id,
+                start_time,
+                num_turns,
             )
-
-            return final_text
 
         except Exception as e:
-            duration_ms = int((time.time() - start_time) * 1000)
             logger.error("graph_execution_failed", error=str(e))
-            publisher.publish_lifecycle_failed(session_id=session_id, error=str(e))
-            publisher.publish_result(
-                session_id=session_id,
-                subtype="error_during_execution",
-                duration_ms=duration_ms,
+            return self._publish_final_result(
+                state,
+                publisher,
+                session_id,
+                start_time,
+                num_turns,
                 is_error=True,
-                result=str(e),
+                error_str=str(e),
             )
-            raise ExecutionError(f"Graph execution failed: {e}") from e
 
     def execute(
         self,
@@ -334,207 +575,59 @@ class ExecutionManager:
         resume_payload: Optional[Any] = None,
     ) -> str:
         start_time = time.time()
-        streamed_text = ""
-        final_messages: list[Any] = []
-        last_structured_response = None
-        last_files: dict[str, Any] = {}
-        published_message_ids: set[str] = set()
+        state = self._init_event_state()
 
         config: RunnableConfig = {"configurable": {"thread_id": session_id}}
 
         try:
-            tools = _compute_tools(agent_definition) if agent_definition else []
-            self.publisher.publish_system_init(
-                session_id=session_id,
-                model=model_name,
-                tools=tools,
+            self._handle_initial_setup(
+                self.publisher,
+                session_id,
+                model_name,
+                agent_definition,
             )
 
-            self.publisher.publish_lifecycle_started(session_id=session_id)
+            stream_input = self._make_stream_input(input_payload, resume_payload)
 
-            if resume_payload is not None:
-                from langgraph.types import Command
-
-                stream_input: Any = Command(resume=resume_payload)
-            else:
-                stream_input = input_payload
-
-            for event in graph.stream(stream_input, config, stream_mode=["values", "messages"]):
-                if not isinstance(event, tuple) or len(event) != 2:
+            run = graph.stream_events(
+                stream_input,
+                config,
+                version="v3",
+            )
+            for event in run:
+                if not isinstance(event, dict):
                     continue
-
-                mode, data = event
-
-                if mode == "messages":
-                    msg_chunk, _metadata = data
-                    if hasattr(msg_chunk, "content") and isinstance(msg_chunk.content, str):
-                        delta = msg_chunk.content
-                        if delta:
-                            streamed_text += delta
-                            self.publisher.publish_stream_event_text(
-                                session_id=session_id,
-                                text=delta,
-                            )
-
-                elif mode == "values":
-                    if isinstance(data, dict):
-                        interrupt_val = data.get("__interrupt__")
-                        if interrupt_val is not None:
-                            logger.info(
-                                "executor_interrupt_detected",
-                                interrupt_val_type=type(interrupt_val).__name__,
-                            )
-                            interrupt_payload = None
-                            if isinstance(interrupt_val, (list, tuple)) and len(interrupt_val) > 0:
-                                raw = interrupt_val[0]
-                                logger.info(
-                                    "executor_interrupt_raw",
-                                    raw_type=type(raw).__name__,
-                                    raw=str(raw)[:500],
-                                )
-                                if hasattr(raw, "value"):
-                                    interrupt_payload = raw.value
-                                elif isinstance(raw, dict):
-                                    interrupt_payload = raw
-                                else:
-                                    interrupt_payload = raw
-                            remaining = streamed_text
-                            streamed_text = ""
-                            if remaining:
-                                self.publisher.publish_assistant(
-                                    session_id=session_id,
-                                    model=model_name,
-                                    content=[{"type": "text", "text": remaining}],
-                                )
-                            duration_ms = int((time.time() - start_time) * 1000)
-                            self.publisher.publish_lifecycle_completed(session_id=session_id)
-                            self.publisher.publish_result(
-                                session_id=session_id,
-                                subtype="interrupted",
-                                duration_ms=duration_ms,
-                                num_turns=num_turns,
-                                result=remaining or None,
-                                interrupt=interrupt_payload,
-                            )
-                            return ""
-                        msgs: list[Any] = data.get("messages", [])
-                        if len(msgs) > len(final_messages):
-                            for msg in msgs[len(final_messages) :]:
-                                msg_id = getattr(msg, "id", None) or str(id(msg))
-                                if msg_id not in published_message_ids:
-                                    published_message_ids.add(msg_id)
-                                    msg_type = getattr(msg, "type", "")
-                                    if msg_type == "ai":
-                                        blocks: list[dict[str, Any]] = []
-                                        text = getattr(msg, "content", "") or ""
-                                        if isinstance(text, str) and text:
-                                            blocks.append({"type": "text", "text": text})
-                                        elif isinstance(text, list):
-                                            for b in text:
-                                                if isinstance(b, dict):
-                                                    blocks.append(b)
-                                        for tc in _extract_tool_calls(msg):
-                                            blocks.append(
-                                                {
-                                                    "type": "tool_use",
-                                                    "id": tc.get(
-                                                        "id", f"call_{uuid.uuid4().hex[:12]}"
-                                                    ),
-                                                    "name": tc.get("name", "unknown"),
-                                                    "input": tc.get("args", tc.get("input", {})),
-                                                }
-                                            )
-                                        if blocks:
-                                            self.publisher.publish_assistant(
-                                                session_id=session_id,
-                                                model=model_name,
-                                                content=blocks,
-                                            )
-                                    elif msg_type == "tool":
-                                        tool_call_id = getattr(
-                                            msg, "tool_call_id", f"call_{uuid.uuid4().hex[:12]}"
-                                        )
-                                        tool_name = getattr(msg, "name", "unknown")
-                                        tool_content = _serialize_content(
-                                            getattr(msg, "content", "")
-                                        )
-                                        is_error = getattr(msg, "is_error", False) or (
-                                            getattr(msg, "additional_kwargs", {}).get(
-                                                "is_error", False
-                                            )
-                                        )
-                                        self.publisher.publish_tool_result(
-                                            session_id=session_id,
-                                            tool_call_id=tool_call_id,
-                                            tool_name=tool_name,
-                                            content=tool_content,
-                                            is_error=is_error,
-                                        )
-                            final_messages = msgs
-                            serialized_msgs = _serialize_messages_for_values(final_messages)
-                            if serialized_msgs:
-                                self.publisher.publish_checkpoint(session_id=session_id)
-                                self.publisher.publish_values(
-                                    session_id=session_id,
-                                    messages=serialized_msgs,
-                                )
-                        if "structured_response" in data:
-                            last_structured_response = data["structured_response"]
-                        state_files = data.get("files")
-                        if state_files:
-                            last_files.update(state_files)
-
-            remaining = streamed_text
-            streamed_text = ""
-            if remaining:
-                self.publisher.publish_assistant(
-                    session_id=session_id,
-                    model=model_name,
-                    content=[{"type": "text", "text": remaining}],
+                ok = self._process_v3_event(
+                    event,
+                    state,
+                    self.publisher,
+                    session_id,
+                    model_name,
+                    start_time,
+                    num_turns,
                 )
+                if not ok:
+                    return ""
 
-            final_text = _extract_final_text(final_messages) or remaining
-            duration_ms = int((time.time() - start_time) * 1000)
-
-            self.publisher.publish_lifecycle_completed(session_id=session_id)
-            self.publisher.publish_result(
-                session_id=session_id,
-                subtype="success",
-                duration_ms=duration_ms,
-                num_turns=num_turns,
-                result=final_text,
-                structured_response=last_structured_response,
-                files=last_files if last_files else None,
+            return self._publish_final_result(
+                state,
+                self.publisher,
+                session_id,
+                start_time,
+                num_turns,
             )
-
-            final_text = _extract_final_text(final_messages) or remaining
-            duration_ms = int((time.time() - start_time) * 1000)
-
-            self.publisher.publish_lifecycle_completed(session_id=session_id)
-            self.publisher.publish_result(
-                session_id=session_id,
-                subtype="success",
-                duration_ms=duration_ms,
-                num_turns=num_turns,
-                result=final_text,
-                structured_response=last_structured_response,
-                files=last_files if last_files else None,
-            )
-
-            return final_text
 
         except Exception as e:
-            duration_ms = int((time.time() - start_time) * 1000)
             logger.error("graph_execution_failed", error=str(e))
-            self.publisher.publish_lifecycle_failed(session_id=session_id, error=str(e))
-            self.publisher.publish_result(
-                session_id=session_id,
-                subtype="error_during_execution",
-                duration_ms=duration_ms,
+            return self._publish_final_result(
+                state,
+                self.publisher,
+                session_id,
+                start_time,
+                num_turns,
                 is_error=True,
-                result=str(e),
+                error_str=str(e),
             )
-            raise ExecutionError(f"Graph execution failed: {e}") from e
 
     def health_check(self) -> bool:
         try:
@@ -571,33 +664,12 @@ class ExecutionManager:
         self.close()
 
 
-def _extract_tool_calls(output: Any) -> list[dict[str, Any]]:
-    raw = getattr(output, "tool_calls", []) or []
-    if isinstance(raw, list):
-        return raw
-    additional_kwargs = getattr(output, "additional_kwargs", {})
-    return cast(list[dict[str, Any]], additional_kwargs.get("tool_calls", []))
-
-
 def _serialize_content(content: Any) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, list):
         return json.dumps(content, default=str)
     return str(content)
-
-
-def _extract_final_text(messages: list) -> str:
-    for msg in reversed(messages):
-        if hasattr(msg, "content") and msg.content:
-            if hasattr(msg, "type") and msg.type == "ai":
-                return msg.content if isinstance(msg.content, str) else str(msg.content)
-    if messages:
-        last = messages[-1]
-        if hasattr(last, "content"):
-            content = last.content
-            return content if isinstance(content, str) else str(content)
-    return ""
 
 
 def _serialize_messages_for_values(messages: list) -> list[dict[str, Any]]:

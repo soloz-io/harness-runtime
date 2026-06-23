@@ -24,8 +24,8 @@ A builtin tool consists of two parts:
 
 ```python
 @tool("ask_user")
-def ask_user(question: str, options: list[str] | None = None, blocking: bool = False) -> str:
-    """Relay a question to the user and wait for their response."""
+def ask_user(questions: list[AskUserQuestion]) -> str:
+    """Relay questions to the user and wait for their response."""
     return ""  # No-op — intercepted by HumanInTheLoopMiddleware
 
 class AskUserMiddleware(AgentMiddleware):

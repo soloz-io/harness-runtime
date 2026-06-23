@@ -1,4 +1,5 @@
 tests/command.txt
+dump.rdb
 dist
 .mypy_cache
 references

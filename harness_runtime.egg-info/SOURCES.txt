@@ -6,6 +6,7 @@ api/main.py
 api/publisher.py
 core/__init__.py
 core/acrylic_topology.py
+core/ask_user.py
 core/builder.py
 core/event_publisher.py
 core/executor.py
@@ -17,7 +18,7 @@ core/model_identifier.py
 core/node_compiler.py
 core/rubric_middleware.py
 core/session.py
-core/start_topology.py
+core/star_topology.py
 core/state_schema_builder.py
 core/structured_output.py
 core/subagent_builder.py
