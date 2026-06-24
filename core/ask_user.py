@@ -7,6 +7,8 @@ The tool body is never executed — it is intercepted by
 injected as the tool result via the `respond` decision.
 """
 
+from typing import Literal
+
 from langchain_core.tools import tool
 from pydantic import BaseModel
 
@@ -25,7 +27,9 @@ class AskUserQuestion(BaseModel):
 
 
 @tool("ask_user")
-def ask_user(questions: list[AskUserQuestion]) -> str:
+def ask_user(
+    questions: list[AskUserQuestion], type: Literal["approval", "clarification"] = "clarification"
+) -> str:
     """Relay questions to the user and wait for their response.
 
     Pauses execution and waits for the user to answer via the UI.
@@ -37,6 +41,7 @@ def ask_user(questions: list[AskUserQuestion]) -> str:
 
     Args:
         questions: Array of question objects to present to the user.
+        type: 'approval' if asking for phase approval, 'clarification' for discovery questions.
 
     Returns:
         The text of the user's response.

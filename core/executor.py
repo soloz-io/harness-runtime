@@ -341,6 +341,13 @@ class ExecutionManager:
 
         elif event_type == "tool-finished":
             raw_output = data.get("output", "")
+
+            # Extract the state update if the tool returned a LangGraph Command
+            from langgraph.types import Command
+
+            if isinstance(raw_output, Command) and raw_output.update:
+                raw_output = raw_output.update
+
             # For sub-agent (task) tools, output is the full graph state
             # dict containing files + messages. Extract the last message's
             # content for display instead of serializing the entire state.
