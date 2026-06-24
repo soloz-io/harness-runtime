@@ -340,11 +340,32 @@ class ExecutionManager:
                 )
 
         elif event_type == "tool-finished":
+            raw_output = data.get("output", "")
+            # For sub-agent (task) tools, output is the full graph state
+            # dict containing files + messages. Extract the last message's
+            # content for display instead of serializing the entire state.
+            if isinstance(raw_output, dict):
+                msgs = raw_output.get("messages", [])
+                if msgs:
+                    last_msg = msgs[-1]
+                    msg_content = getattr(last_msg, "content", "")
+                    if isinstance(msg_content, list):
+                        content = " ".join(
+                            b.get("text", "") for b in msg_content if isinstance(b, dict)
+                        )
+                    elif not isinstance(msg_content, str):
+                        content = str(msg_content)
+                    else:
+                        content = msg_content
+                else:
+                    content = _serialize_content(raw_output)
+            else:
+                content = _serialize_content(raw_output)
             publisher.publish_tool_result(
                 session_id=session_id,
                 tool_call_id=tool_call_id,
                 tool_name=data.get("tool_name", "unknown"),
-                content=_serialize_content(data.get("output", "")),
+                content=content,
                 is_error=bool(data.get("is_error", False)),
             )
 

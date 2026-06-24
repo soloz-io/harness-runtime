@@ -31,6 +31,39 @@ _session_store: dict[str, SessionState] = {}
 _execution_manager: Optional[ExecutionManager] = None
 
 
+def _trim_sentinel(session_id: str) -> None:
+    """Remove stale sentinel entries from the Redis stream for a session.
+
+    When a turn completes, the publisher writes a sentinel (``\\x00end\\x00``)
+    to the stream.  Before starting a new turn we must remove it so the SSE
+    event generator doesn't hit the old sentinel and terminate prematurely.
+    """
+    import redis as sync_redis
+
+    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    r = sync_redis.from_url(redis_url)
+    key = _stream_key(session_id)
+    try:
+        # Scan last 10 entries — sentinel is always at or near the tail.
+        entries = r.xrevrange(key, count=10)
+        ids_to_delete: list[str | bytes] = []
+        for entry_id, fields in entries:
+            data_raw = fields.get(b"data", b"")
+            if data_raw == _SENTINEL:
+                ids_to_delete.append(entry_id)
+        if ids_to_delete:
+            r.xdel(key, *ids_to_delete)
+            logger.info(
+                "sentinel_trimmed",
+                session_id=session_id,
+                deleted_count=len(ids_to_delete),
+            )
+    except Exception as e:
+        logger.warning("sentinel_trim_failed", session_id=session_id, error=str(e))
+    finally:
+        r.close()
+
+
 async def init_execution_manager_async() -> None:
     global _execution_manager
     if _execution_manager is None:
@@ -95,9 +128,12 @@ async def handle_message(session_id: str, body: dict[str, Any]) -> dict[str, Any
         state = _session_store[session_id]
         if resume_payload:
             state.session.initialize(resume_payload=resume_payload)
-            # Create a fresh publisher for the resumed turn — the old one was closed
-            # when the first turn completed (sentinel written). A new publisher ensures
-            # events from the resumed turn reach Redis Streams.
+            # The previous turn's publisher wrote a sentinel to the Redis stream
+            # when it closed. We must remove it before the new publisher starts
+            # writing, otherwise the SSE event generator will read the stale
+            # sentinel and terminate the new stream immediately.
+            _trim_sentinel(session_id)
+            # Create a fresh publisher for the resumed turn.
             state.publisher = SSEEventPublisher(session_id)
     else:
         publisher = SSEEventPublisher(session_id)

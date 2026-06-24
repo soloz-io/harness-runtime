@@ -1,13 +1,12 @@
 """
 Ask User Tool — built-in HITL tool for relaying questions to the user.
 
-Provides the `ask_user` tool via `AskUserMiddleware`, which is wired into
-all topology builders (star, acrylic, subagent). The tool body is never
-executed — it is intercepted by `HumanInTheLoopMiddleware` via `interrupt_on`.
-The human's response is injected as the tool result via the `respond` decision.
+Registered on the `HumanInteractionMiddleware` alongside `review_content`.
+The tool body is never executed — it is intercepted by
+`HumanInTheLoopMiddleware` via `interrupt_on`. The human's response is
+injected as the tool result via the `respond` decision.
 """
 
-from langchain.agents.middleware import AgentMiddleware
 from langchain_core.tools import tool
 from pydantic import BaseModel
 
@@ -46,14 +45,3 @@ def ask_user(questions: list[AskUserQuestion]) -> str:
     # The actual response is injected by the HumanInTheLoopMiddleware
     # when the human submits their answer in the UI.
     return ""
-
-
-class AskUserMiddleware(AgentMiddleware):
-    """Provides the ask_user tool to agents.
-
-    Wire this middleware into the agent's middleware stack to make the
-    ask_user tool available. The tool's actual behavior comes from the
-    HumanInTheLoopMiddleware configured via interrupt_on.
-    """
-
-    tools = [ask_user]

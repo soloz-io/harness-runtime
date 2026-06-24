@@ -14,7 +14,7 @@ try:
     from langchain.agents import create_agent
     from langchain.agents.middleware import HumanInTheLoopMiddleware, TodoListMiddleware
 
-    from core.ask_user import AskUserMiddleware
+    from core.human_interaction import HumanInteractionMiddleware
 except ImportError as e:
     raise ImportError(
         "deepagents package is required but not installed. "
@@ -37,7 +37,7 @@ def build_node_middleware(
     middleware: list[Any] = [
         TodoListMiddleware(),
         FilesystemMiddleware(),
-        AskUserMiddleware(),
+        HumanInteractionMiddleware(),
         PatchToolCallsMiddleware(),
     ]
     interrupt_on_config = node_config.get("interrupt_on")

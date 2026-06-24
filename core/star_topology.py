@@ -10,7 +10,7 @@ from typing import Any, Dict, List
 import structlog
 from langchain_core.runnables import Runnable
 
-from core.ask_user import AskUserMiddleware
+from core.human_interaction import HumanInteractionMiddleware
 from core.interfaces import TopologyBuilder
 from core.rubric_middleware import build_rubric_middlewares
 from core.structured_output import build_tool_strategy, resolve_structured_output_model
@@ -140,7 +140,7 @@ class StarTopologyBuilder(TopologyBuilder):
 
         # Build middlewares starting with Rubric if configured
         middleware_stack = build_rubric_middlewares(rubric_config, deep_agent_kwargs["model"])
-        middleware_stack.append(AskUserMiddleware())
+        middleware_stack.append(HumanInteractionMiddleware())
         if middleware_stack:
             deep_agent_kwargs["middleware"] = middleware_stack
 
