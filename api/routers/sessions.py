@@ -100,6 +100,22 @@ def init_execution_manager() -> None:
         logger.info("execution_manager_initialized")
 
 
+async def shutdown_execution_manager_async() -> None:
+    global _execution_manager
+    if _execution_manager is not None:
+        await _execution_manager.aclose()
+        _execution_manager = None
+        logger.info("execution_manager_shutdown")
+
+
+def shutdown_execution_manager() -> None:
+    global _execution_manager
+    if _execution_manager is not None:
+        _execution_manager.close()
+        _execution_manager = None
+        logger.info("execution_manager_shutdown")
+
+
 async def _run_turn_async(
     session: Session, publisher: SSEEventPublisher, user_content: str
 ) -> None:

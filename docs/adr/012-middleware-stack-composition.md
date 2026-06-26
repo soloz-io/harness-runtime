@@ -25,7 +25,7 @@ All topology builders and subagent builders use the same base order:
 ```
  1. TodoListMiddleware        — provides write_todos tool for task tracking
  2. FilesystemMiddleware      — provides read_file, write_file, ls, glob, grep, execute
- 3. AskUserMiddleware          — provides ask_user tool for HITL questions
+  3. HumanInteractionMiddleware — provides ask_user and review_content HITL tools
  4. PatchToolCallsMiddleware  — repairs message history after interrupt/resume
  5. RubricMiddleware           — evaluates artifact quality after agent completes (optional)
  6. HumanInTheLoopMiddleware  — intercepts interrupt_on tools before execution (optional)
@@ -35,15 +35,15 @@ All topology builders and subagent builders use the same base order:
 
 1. **TodoList first**: Task tracking should be available to all subsequent middleware and the agent. No reason to put it later.
 
-2. **Filesystem before AskUser**: Filesystem tools are the most commonly used. Putting them early ensures they're in the base tool list before any conditional middleware.
+2. **Filesystem before HumanInteraction**: Filesystem tools are the most commonly used. Putting them early ensures they're in the base tool list before any conditional middleware.
 
-3. **AskUser after Filesystem**: User interaction tools should not interfere with filesystem tool auto-injection.
+3. **HumanInteraction after Filesystem**: User interaction tools should not interfere with filesystem tool auto-injection.
 
 4. **PatchToolCalls after tools**: This middleware requires the full tool list (including middleware-provided tools) to be populated so it can properly correlate tool calls with tool results during resume.
 
 5. **Rubric before HITL**: Rubric evaluation should run before human review — the human sees rubric-graded artifacts rather than raw agent output.
 
-6. **HumanInTheLoop outermost (last)**: HITL middleware intercepts tool calls *before* they execute. Placing it last means it intercepts after all other middleware have processed the tool call. This ensures other middleware (Filesystem, AskUser, PatchToolCalls) have already had their chance to modify or react to the tool call.
+6. **HumanInTheLoop outermost (last)**: HITL middleware intercepts tool calls *before* they execute. Placing it last means it intercepts after all other middleware have processed the tool call. This ensures other middleware (Filesystem, HumanInteraction, PatchToolCalls) have already had their chance to modify or react to the tool call.
 
 ### Middleware injection points
 

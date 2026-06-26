@@ -16,13 +16,16 @@ import uuid
 from contextlib import _GeneratorContextManager
 from typing import Any, Optional
 
+import psycopg
 import structlog
 from deepagents.middleware.filesystem import FilesystemMiddleware
 from langchain_core.runnables import Runnable, RunnableConfig
 from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+from psycopg_pool import AsyncConnectionPool, ConnectionPool
 
 from core.event_publisher import EventPublisher
+from core.message_writer import write_chat_messages
 
 
 def _get_middleware_tools() -> list[dict[str, Any]]:
@@ -82,15 +85,19 @@ class ExecutionManager:
         self._checkpointer_context: Optional[_GeneratorContextManager[PostgresSaver]] = None
         self._async_checkpointer: Optional[AsyncPostgresSaver] = None
         self._async_checkpointer_context: Any = None
+        self._pool: Optional[ConnectionPool] = None
+        self._async_pool: Optional[AsyncConnectionPool] = None
         if postgres_connection_string:
+            self._pool = ConnectionPool(postgres_connection_string, min_size=1, max_size=5)
             self._setup_checkpointer()
 
     def _setup_checkpointer(self) -> None:
         try:
-            ctx = PostgresSaver.from_conn_string(self.postgres_connection_string)
-            self._checkpointer_context = ctx
-            self.checkpointer = ctx.__enter__()
+            conn = psycopg.connect(self.postgres_connection_string, autocommit=True)
+            self.checkpointer = PostgresSaver(conn=conn)
             self.checkpointer.setup()
+            conn.close()
+            self.checkpointer = PostgresSaver(conn=self._pool)
         except Exception as e:
             logger.error("checkpointer_setup_failed", error=str(e))
             raise
@@ -108,17 +115,27 @@ class ExecutionManager:
         self._checkpointer_context = None
         self._async_checkpointer = None
         self._async_checkpointer_context = None
+        self._pool = None
+        self._async_pool = None
         if postgres_connection_string:
+            self._pool = ConnectionPool(postgres_connection_string, min_size=1, max_size=5)
             await self._async_setup_checkpointer()
             self.checkpointer = self._async_checkpointer
         return self
 
     async def _async_setup_checkpointer(self) -> None:
         try:
-            ctx = AsyncPostgresSaver.from_conn_string(self.postgres_connection_string)
-            self._async_checkpointer_context = ctx
-            self._async_checkpointer = await ctx.__aenter__()
+            self._async_pool = AsyncConnectionPool(
+                self.postgres_connection_string, min_size=1, max_size=5
+            )
+            aconn = await psycopg.AsyncConnection.connect(
+                self.postgres_connection_string,
+                autocommit=True,
+            )
+            self._async_checkpointer = AsyncPostgresSaver(conn=aconn)
             await self._async_checkpointer.setup()
+            await aconn.close()
+            self._async_checkpointer = AsyncPostgresSaver(conn=self._async_pool)
         except Exception as e:
             logger.error("async_checkpointer_setup_failed", error=str(e))
             raise
@@ -421,6 +438,20 @@ class ExecutionManager:
             state["_values_messages_count"] = len(msgs)
             serialized_msgs = _serialize_messages_for_values(msgs)
             if serialized_msgs:
+                # Write projection before SSE (narrows inconsistency window)
+                if self._pool:
+                    logger.debug(
+                        "handle_values_writing_messages",
+                        session_id=session_id,
+                        new_count=len(serialized_msgs),
+                        prev_count=prev_count,
+                    )
+                    write_chat_messages(self._pool, session_id, serialized_msgs, prev_count)
+                else:
+                    logger.warning(
+                        "handle_values_no_pool_skipping_message_write",
+                        session_id=session_id,
+                    )
                 publisher.publish_checkpoint(session_id=session_id)
                 publisher.publish_values(
                     session_id=session_id,
@@ -669,6 +700,9 @@ class ExecutionManager:
                 self._checkpointer_context.__exit__(None, None, None)
                 self._checkpointer_context = None
                 self.checkpointer = None
+            if self._pool:
+                self._pool.close()
+                self._pool = None
         except Exception as e:
             logger.error("execution_manager_close_failed", error=str(e))
 
@@ -682,6 +716,12 @@ class ExecutionManager:
                 await self._async_checkpointer_context.__aexit__(None, None, None)
                 self._async_checkpointer_context = None
                 self._async_checkpointer = None
+            if self._async_pool:
+                await self._async_pool.close()
+                self._async_pool = None
+            if self._pool:
+                self._pool.close()
+                self._pool = None
         except Exception as e:
             logger.error("execution_manager_aclose_failed", error=str(e))
 
@@ -703,8 +743,11 @@ def _serialize_content(content: Any) -> str:
 def _serialize_messages_for_values(messages: list) -> list[dict[str, Any]]:
     serialized: list[dict[str, Any]] = []
     for msg in messages:
+        msg_id = getattr(msg, "id", None)
+        if not msg_id:
+            msg_id = str(uuid.uuid4())
         entry: dict[str, Any] = {
-            "id": getattr(msg, "id", str(id(msg))),
+            "id": msg_id,
             "type": getattr(msg, "type", "unknown"),
         }
         content = getattr(msg, "content", "")

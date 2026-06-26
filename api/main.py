@@ -28,6 +28,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("harness_runtime_http_started")
     yield
     logger.info("harness_runtime_http_shutting_down")
+    await sessions.shutdown_execution_manager_async()
 
 
 app = FastAPI(title="Harness Runtime HTTP", version="0.1.0", lifespan=lifespan)

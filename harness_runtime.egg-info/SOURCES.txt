@@ -11,11 +11,14 @@ core/builder.py
 core/event_publisher.py
 core/executor.py
 core/factory.py
+core/human_interaction.py
 core/interfaces.py
 core/mcp_loader.py
+core/message_writer.py
 core/model_factory.py
 core/model_identifier.py
 core/node_compiler.py
+core/review_content.py
 core/rubric_middleware.py
 core/session.py
 core/star_topology.py

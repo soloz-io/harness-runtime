@@ -7,9 +7,10 @@
 
 Some tool calls require human approval, editing, or response before execution. The harness-runtime supports this via LangGraph's interrupt mechanism and DeepAgents' `HumanInTheLoopMiddleware`.
 
-Two distinct HITL patterns exist:
-1. **Approval gate** (e.g., `script_reviewer`): Human approves, edits, or rejects a tool call. Rejection returns feedback to the agent.
-2. **Ask user** (e.g., `ask_user`): Human provides unstructured text as the tool result. The tool body is never executed — the human's response IS the output.
+Three distinct HITL patterns exist:
+1. **Ask user** (e.g., `ask_user`): Human provides unstructured text as the tool result. The tool body is never executed — the human's response IS the output.
+2. **Phase review** (e.g., `review_content`): Human reviews a completed deliverable and either approves, rejects with feedback, or edits the content directly.
+3. **Approval gate** (legacy `script_reviewer` pattern): Human approves, edits, or rejects a tool call before execution. Rejection returns feedback to the agent.
 
 These differ in semantics and `allowed_decisions`. Without a documented protocol, it's unclear which pattern applies when, and how the runtime should handle each.
 
@@ -44,33 +45,63 @@ The four `allowed_decisions` serve distinct purposes:
 
 `respond` is unique: the tool body is **never executed**. The human's free-text input is injected directly as the `ToolMessage` content. This is essential for `ask_user` — the orchestrator needs the human's answer, not an approval/rejection.
 
-### `ask_user` tool contract
+### Builtin HITL tool contracts
 
-The `ask_user` tool defines its schema for the LLM with a single parameter:
+Two builtin HITL tools are registered via `HumanInteractionMiddleware` (see ADR-010):
 
 ```python
 @tool("ask_user")
-def ask_user(questions: list[AskUserQuestion]) -> str:
+def ask_user(
+    questions: list[AskUserQuestion],
+    type: Literal["approval", "clarification"] = "clarification",
+) -> str:
     """Relay questions to the user and wait for their response."""
 ```
 
 - `questions`: Array of question objects. Each item has `question` (str), optional `options` (list[str]), and optional `blocking` (bool).
+- `type`: `"clarification"` for discovery questions the LLM asks naturally during research; `"approval"` when the LLM needs explicit go-ahead for a phase transition.
 
-The tool body is a no-op. The `respond` decision ensures the human's text becomes the return value.
+A `type: "clarification"` ask_user should use only `["respond"]` as the allowed decision. A `type: "approval"` ask_user may additionally allow `["approve", "edit", "reject"]` if the UI supports it.
+
+```python
+@tool("review_content")
+def review_content(phase_name: str, content: str) -> str:
+    """Request human review and approval of completed phase output."""
+```
+
+- `phase_name`: Human-readable label for the phase being reviewed.
+- `content`: The deliverable content to present for review.
+
+The tool body is a no-op. For `ask_user`, the `respond` decision ensures the human's text becomes the return value. For `review_content`, the `approve`/`reject`/`edit` decisions return the appropriate status and feedback.
 
 ### Interrupt lifecycle
 
+Both tools follow the same interrupt lifecycle, differing only in `allowed_decisions`:
+
 ```
-LLM calls ask_user(questions=[{question: "...", options: [...], blocking: true}, ...])
+LLM calls ask_user(questions=[...], type="clarification")
   → HumanInTheLoopMiddleware intercepts (tool call is in interrupt_on)
   → Agent execution pauses
   → Runtime emits interrupt event to SDK/UI:
-      { action_requests: [{ name: "ask_user", args: { questions: [{question: "...", options: [...], blocking: true}] } }],
+      { action_requests: [{ name: "ask_user", args: { questions: [...], type: "clarification" } }],
         review_configs: [{ action_name: "ask_user", allowed_decisions: ["respond"] }] }
   → Human submits response via UI
   → SDK sends Command(resume={ decisions: [{ type: "respond", message: "..." }] })
   → HumanInTheLoopMiddleware injects "..." as the ToolMessage content
   → Agent resumes with the response as the tool result
+```
+
+```
+LLM calls review_content(phase_name="Script Review", content="...")
+  → HumanInTheLoopMiddleware intercepts
+  → Agent execution pauses
+  → Runtime emits interrupt event:
+      { action_requests: [{ name: "review_content", args: { phase_name: "Script Review", content: "..." } }],
+        review_configs: [{ action_name: "review_content", allowed_decisions: ["approve", "edit", "reject"] }] }
+  → Human reviews content, submits decision
+  → SDK sends Command(resume={ decisions: [{ type: "approve" }] })
+  → HumanInTheLoopMiddleware injects the decision as the ToolMessage content
+  → Agent resumes
 ```
 
 ### `blocking` field semantics
@@ -107,7 +138,9 @@ The orchestrator prompt uses `blocking` to decide whether the specialist can pro
 - `core/star_topology.py`: `interrupt_on` passed to `create_deep_agent()`
 - `core/node_compiler.py`: `HumanInTheLoopMiddleware(interrupt_on=...)` in `build_node_middleware()`
 - `core/executor.py`: Interrupt detection and resume via `Command(resume=...)`
-- `core/ask_user.py`: `ask_user` tool definition with `blocking` parameter
+- `core/ask_user.py`: `ask_user` tool definition with `type` and `blocking` parameters
+- `core/review_content.py`: `review_content` tool for phase output review
+- `core/human_interaction.py`: `HumanInteractionMiddleware` — bundles both HITL tools into a single middleware
 - `langchain/agents/middleware/human_in_the_loop.py`: `HumanInTheLoopMiddleware` implementation
 - `deepagents/graph.py`: `create_deep_agent` — auto-adds `HumanInTheLoopMiddleware` when `interrupt_on` is provided
 - ADR-010: Builtin Tool Architecture — middleware pattern for builtin tools

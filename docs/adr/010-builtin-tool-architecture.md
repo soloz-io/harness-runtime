@@ -5,7 +5,7 @@
 
 ## Context
 
-The harness-runtime needs a set of foundational tools available to every agent regardless of the DAG definition: filesystem access (`read_file`, `write_file`), user interaction (`ask_user`), and task management (`write_todos`). These tools should not require a `tool_definitions` entry in every definition.json — they should be always present.
+The harness-runtime needs a set of foundational tools available to every agent regardless of the DAG definition: filesystem access (`read_file`, `write_file`), user interaction (`ask_user`, `review_content`), and task management (`write_todos`). These tools should not require a `tool_definitions` entry in every definition.json — they should be always present.
 
 There are two mechanisms for making tools available to agents:
 1. **`tool_definitions` pathway**: Define a Python script in the JSON, `exec()` it at load time, register the `BaseTool` in `available_tools`, and require each node's `tools` array to reference it.
@@ -24,12 +24,20 @@ A builtin tool consists of two parts:
 
 ```python
 @tool("ask_user")
-def ask_user(questions: list[AskUserQuestion]) -> str:
+def ask_user(
+    questions: list[AskUserQuestion],
+    type: Literal["approval", "clarification"] = "clarification",
+) -> str:
     """Relay questions to the user and wait for their response."""
     return ""  # No-op — intercepted by HumanInTheLoopMiddleware
 
-class AskUserMiddleware(AgentMiddleware):
-    tools = [ask_user]
+@tool("review_content")
+def review_content(phase_name: str, content: str) -> str:
+    """Request human review and approval of completed phase output."""
+    return ""  # No-op — intercepted by HumanInTheLoopMiddleware
+
+class HumanInteractionMiddleware(AgentMiddleware):
+    tools = [ask_user, review_content]
 ```
 
 ### Middleware is added to all topology builders
@@ -61,7 +69,9 @@ For the AI Gateway path (which dynamically builds agent definitions via `agent-b
 
 ## References
 
-- `core/ask_user.py`: `ask_user` tool + `AskUserMiddleware` — canonical builtin example
+- `core/ask_user.py`: `ask_user` tool — canonical builtin example (HITL interceptable)
+- `core/review_content.py`: `review_content` tool — phase review builtin (HITL interceptable)
+- `core/human_interaction.py`: `HumanInteractionMiddleware` — bundles all HITL builtin tools
 - `deepagents/middleware/filesystem.py`: `FilesystemMiddleware` — the original middleware-provided tool pattern
 - `deepagents/middleware/todo.py`: `TodoListMiddleware` — provides `write_todos` tool
 - `core/star_topology.py`, `core/node_compiler.py`, `core/subagent_builder.py`: Middleware injection points
