@@ -28,7 +28,9 @@ class AskUserQuestion(BaseModel):
 
 @tool("ask_user")
 def ask_user(
-    questions: list[AskUserQuestion], type: Literal["approval", "clarification"] = "clarification"
+    questions: list[AskUserQuestion],
+    type: Literal["approval", "clarification"] = "clarification",
+    file_path: str | None = None,
 ) -> str:
     """Relay questions to the user and wait for their response.
 
@@ -42,6 +44,7 @@ def ask_user(
     Args:
         questions: Array of question objects to present to the user.
         type: 'approval' if asking for phase approval, 'clarification' for discovery questions.
+        file_path: Optional path to a file to display alongside the question.
 
     Returns:
         The text of the user's response.
