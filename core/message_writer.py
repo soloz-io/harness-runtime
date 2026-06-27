@@ -96,3 +96,47 @@ def write_chat_messages(
             session_id=session_id,
             message_count=len(messages),
         )
+
+
+def write_agent_output_files(
+    pool: ConnectionPool,
+    session_id: str,
+    files: dict[str, dict[str, str]],
+) -> None:
+    """Insert or update agent output files.
+
+    Projected from the ``last_files`` state key accumulated during graph
+    execution (both orchestrator and subagent files).  Callers invoke this
+    alongside ``write_chat_messages`` so that files are persisted for the
+    REST history path, not just SSE streaming.
+
+    Upsert semantics: if a row with the same (session_id, filename) already
+    exists, its content and format are updated.
+    """
+    if not files:
+        return
+
+    try:
+        with pool.connection() as conn:
+            with conn.cursor() as cur:
+                for file_path, file_info in files.items():
+                    filename = file_path.lstrip("/")
+                    fmt = "markdown" if filename.endswith(".md") else "json"
+                    file_id = uuid.uuid4().hex
+                    cur.execute(
+                        """
+                        INSERT INTO agent_output_files
+                            (id, session_id, filename, content, format)
+                        VALUES (%s, %s, %s, %s, %s)
+                        ON CONFLICT (session_id, filename)
+                            DO UPDATE SET content = EXCLUDED.content,
+                                          format  = EXCLUDED.format
+                        """,
+                        (file_id, session_id, filename, file_info.get("content", ""), fmt),
+                    )
+    except Exception:
+        logger.exception(
+            "write_agent_output_files_failed",
+            session_id=session_id,
+            file_count=len(files),
+        )

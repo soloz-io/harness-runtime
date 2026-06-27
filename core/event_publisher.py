@@ -35,7 +35,13 @@ class EventPublisher(ABC):
     def publish_checkpoint(self, *, session_id: str) -> None: ...
 
     @abstractmethod
-    def publish_values(self, *, session_id: str, messages: list[dict[str, Any]]) -> None: ...
+    def publish_values(
+        self,
+        *,
+        session_id: str,
+        messages: list[dict[str, Any]],
+        files: Optional[dict[str, Any]] = None,
+    ) -> None: ...
 
     @abstractmethod
     def publish_system_init(
@@ -121,7 +127,13 @@ class StdioPublisher(EventPublisher):
     def publish_checkpoint(self, *, session_id: str) -> None:
         pass
 
-    def publish_values(self, *, session_id: str, messages: list[dict[str, Any]]) -> None:
+    def publish_values(
+        self,
+        *,
+        session_id: str,
+        messages: list[dict[str, Any]],
+        files: Optional[dict[str, Any]] = None,
+    ) -> None:
         pass
 
     def publish_system_init(

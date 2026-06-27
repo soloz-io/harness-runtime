@@ -104,15 +104,17 @@ class SSEEventPublisher(EventPublisher):
             )
         )
 
-    def publish_values(self, *, session_id: str, messages: list[dict[str, Any]]) -> None:
-        self._write(
-            self._protocol_event(
-                "values",
-                {
-                    "messages": messages,
-                },
-            )
-        )
+    def publish_values(
+        self,
+        *,
+        session_id: str,
+        messages: list[dict[str, Any]],
+        files: Optional[dict[str, Any]] = None,
+    ) -> None:
+        data: dict[str, Any] = {"messages": messages}
+        if files:
+            data["files"] = files
+        self._write(self._protocol_event("values", data))
 
     def publish_system_init(
         self, *, session_id: str, model: str, tools: Optional[list[dict[str, Any]]] = None

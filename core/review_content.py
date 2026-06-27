@@ -11,7 +11,7 @@ from langchain_core.tools import tool
 
 
 @tool("review_content")
-def review_content(phase_name: str, content: str) -> str:
+def review_content(phase_name: str, file_name: str, content: str) -> str:
     """Request human review and approval of completed phase output.
 
     Presents the phase deliverable (content) to the user for review.
@@ -20,6 +20,7 @@ def review_content(phase_name: str, content: str) -> str:
 
     Args:
         phase_name: Name of the phase whose output is being reviewed.
+        file_name: The file name representing the deliverable (e.g. 'Discovery_Review.md').
         content: The phase deliverable content to present for review.
 
     Returns:

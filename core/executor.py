@@ -25,7 +25,7 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from psycopg_pool import AsyncConnectionPool, ConnectionPool
 
 from core.event_publisher import EventPublisher
-from core.message_writer import write_chat_messages
+from core.message_writer import write_agent_output_files, write_chat_messages
 
 
 def _get_middleware_tools() -> list[dict[str, Any]]:
@@ -447,6 +447,7 @@ class ExecutionManager:
                         prev_count=prev_count,
                     )
                     write_chat_messages(self._pool, session_id, serialized_msgs, prev_count)
+                    write_agent_output_files(self._pool, session_id, state.get("last_files"))
                 else:
                     logger.warning(
                         "handle_values_no_pool_skipping_message_write",
@@ -456,6 +457,7 @@ class ExecutionManager:
                 publisher.publish_values(
                     session_id=session_id,
                     messages=serialized_msgs,
+                    files=state.get("last_files"),
                 )
 
     def _handle_interrupt(
