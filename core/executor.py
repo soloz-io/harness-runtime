@@ -352,7 +352,7 @@ class ExecutionManager:
                 publisher.publish_tool_output_delta(
                     session_id=session_id,
                     tool_call_id=tool_call_id,
-                    tool_name=data.get("tool_name", "unknown"),
+                    tool_name=data.get("tool_name") or data.get("name") or "unknown",
                     delta=delta,
                 )
 
@@ -388,7 +388,7 @@ class ExecutionManager:
             publisher.publish_tool_result(
                 session_id=session_id,
                 tool_call_id=tool_call_id,
-                tool_name=data.get("tool_name", "unknown"),
+                tool_name=data.get("tool_name") or data.get("name") or "unknown",
                 content=content,
                 is_error=bool(data.get("is_error", False)),
             )

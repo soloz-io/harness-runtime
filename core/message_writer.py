@@ -19,6 +19,7 @@ state.  The caller tracks which messages have been seen via
 """
 
 import uuid
+from pathlib import Path
 from typing import Any
 
 import structlog
@@ -33,6 +34,16 @@ ROLE_MAP: dict[str, str] = {
     "ai": "assistant",
     "system": "system",
     "tool": "tool",
+}
+
+_MEDIA_TYPES: dict[str, str] = {
+    ".md": "text/markdown",
+    ".json": "application/json",
+    ".txt": "text/plain",
+    ".html": "text/html",
+    ".yaml": "application/x-yaml",
+    ".yml": "application/x-yaml",
+    ".csv": "text/csv",
 }
 
 
@@ -110,7 +121,7 @@ def write_agent_output_files(
     alongside ``write_chat_messages`` so that files are persisted for the
     REST history path, not just SSE streaming.
 
-    Upsert semantics: if a row with the same (session_id, filename) already
+    Upsert semantics: if a row with the same (session_id, filepath) already
     exists, its content and format are updated.
     """
     if not files:
@@ -120,19 +131,34 @@ def write_agent_output_files(
         with pool.connection() as conn:
             with conn.cursor() as cur:
                 for file_path, file_info in files.items():
-                    filename = file_path.lstrip("/")
-                    fmt = "markdown" if filename.endswith(".md") else "json"
+                    filepath = file_path.lstrip("/")
+                    if filepath.startswith("home/ubuntu/"):
+                        filepath = filepath[12:]
+                    filename = Path(filepath).name
+                    fmt = "markdown" if filepath.endswith(".md") else "json"
+                    ext = Path(filepath).suffix.lower()
+                    media_type = _MEDIA_TYPES.get(ext, "text/plain")
                     file_id = uuid.uuid4().hex
                     cur.execute(
                         """
                         INSERT INTO agent_output_files
-                            (id, session_id, filename, content, format)
-                        VALUES (%s, %s, %s, %s, %s)
-                        ON CONFLICT (session_id, filename)
+                            (id, session_id, filename, filepath, content, format, media_type, url)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (session_id, filepath)
                             DO UPDATE SET content = EXCLUDED.content,
-                                          format  = EXCLUDED.format
+                                          format  = EXCLUDED.format,
+                                          media_type = EXCLUDED.media_type
                         """,
-                        (file_id, session_id, filename, file_info.get("content", ""), fmt),
+                        (
+                            file_id,
+                            session_id,
+                            filename,
+                            filepath,
+                            file_info.get("content", ""),
+                            fmt,
+                            media_type,
+                            "",
+                        ),
                     )
     except Exception:
         logger.exception(
