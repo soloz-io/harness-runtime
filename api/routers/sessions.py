@@ -144,14 +144,17 @@ async def handle_message(session_id: str, body: dict[str, Any]) -> dict[str, Any
         state = _session_store[session_id]
         if resume_payload:
             state.session.initialize(resume_payload=resume_payload)
-            # The previous turn's publisher wrote a sentinel to the Redis stream
-            # when it closed. We must remove it before the new publisher starts
-            # writing, otherwise the SSE event generator will read the stale
-            # sentinel and terminate the new stream immediately.
-            _trim_sentinel(session_id)
-            # Create a fresh publisher for the resumed turn.
-            state.publisher = SSEEventPublisher(session_id)
+
+        # The previous turn's publisher wrote a sentinel to the Redis stream
+        # when it closed. We must remove it before the new publisher starts
+        # writing, otherwise the SSE event generator will read the stale
+        # sentinel and terminate the new stream immediately.
+        _trim_sentinel(session_id)
+        # Create a fresh publisher for the new turn.
+        state.publisher = SSEEventPublisher(session_id)
     else:
+        # If the server restarted, an old sentinel might still be in Redis.
+        _trim_sentinel(session_id)
         publisher = SSEEventPublisher(session_id)
         if not _execution_manager:
             raise HTTPException(status_code=503, detail="ExecutionManager not initialized")

@@ -134,6 +134,8 @@ def write_agent_output_files(
                     filepath = file_path.lstrip("/")
                     if filepath.startswith("home/ubuntu/"):
                         filepath = filepath[12:]
+                    elif filepath.startswith("workspace/"):
+                        filepath = filepath[10:]
                     filename = Path(filepath).name
                     fmt = "markdown" if filepath.endswith(".md") else "json"
                     ext = Path(filepath).suffix.lower()
