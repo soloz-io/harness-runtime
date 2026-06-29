@@ -45,8 +45,11 @@ harness-runtime = "cli:main"
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools.packages.find]
+include = ["core*", "models*", "api*", "migrations*"]
+namespaces = false
+
 [tool.setuptools]
-packages = ["core", "models", "api"]
 py-modules = ["cli"]
 
 [tool.setuptools.package-data]

@@ -198,16 +198,25 @@ class StarTopologyBuilder(TopologyBuilder):
                 "git_ref_create_filesystem_backend", root_dir=str(cloner.path), virtual_mode=True
             )
             skills_backend = FilesystemBackend(
-                root_dir=str(cloner.path),
+                root_dir=str(cloner.path / "skills"),
+                virtual_mode=True,
+            )
+            memory_backend = FilesystemBackend(
+                root_dir=str(cloner.path / "memory"),
                 virtual_mode=True,
             )
 
             logger.info(
-                "git_ref_create_composite_backend", route="/skills/", default_backend="StateBackend"
+                "git_ref_create_composite_backend",
+                route="/skills/ and /memory/",
+                default_backend="StateBackend",
             )
             composite_backend = CompositeBackend(
                 default=StateBackend(),
-                routes={"/skills/": skills_backend},
+                routes={
+                    "/skills/": skills_backend,
+                    "/memory/": memory_backend,
+                },
             )
 
             # SkillsMiddleware is auto-wired by create_deep_agent when
@@ -219,6 +228,7 @@ class StarTopologyBuilder(TopologyBuilder):
             )
             deep_agent_kwargs["backend"] = composite_backend
             deep_agent_kwargs["skills"] = ["/skills/"]
+            deep_agent_kwargs["memory"] = ["/memory/"]
 
         else:
             logger.info("git_ref_absent_no_git_skills")

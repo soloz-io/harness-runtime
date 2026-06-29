@@ -1,5 +1,10 @@
 """GitBackend — pure cloner. Clones a git repo subfolder to a local temp directory.
 
+Auth follows the openSWE proxy pattern: the GitHub token is fetched at runtime
+from the control plane API (never passed as an env var to the pod), and injected
+into git via a temporary GIT_ASKPASS script rather than embedded in the clone
+URL. This keeps the token out of process listings and git error logs.
+
 All file operations (read, ls, grep, glob) are handled by deepagents built-in
 ``FilesystemBackend`` and ``SkillsMiddleware``. This class does NOT implement
 ``BackendProtocol`` — it only performs the clone and exposes ``.path``.
@@ -7,6 +12,7 @@ All file operations (read, ls, grep, glob) are handled by deepagents built-in
 
 import os
 import shutil
+import stat
 import subprocess
 import tempfile
 import time
@@ -20,7 +26,6 @@ logger = structlog.get_logger(__name__)
 
 ENV_OWNER = "HARNESS_GIT_OWNER"
 ENV_REPO = "HARNESS_GIT_REPO"
-DEFAULT_BRANCH = "main"
 
 
 class GitBackendError(Exception):
@@ -30,11 +35,10 @@ class GitBackendError(Exception):
 class GitBackend:
     """Clone a git repo subfolder and expose its local path.
 
-    Environment variables:
-
-    - ``HARNESS_GIT_OWNER`` (required) — GitHub org or user
-    - ``HARNESS_GIT_REPO`` (required) — GitHub repository name
-    - ``GITHUB_TOKEN`` (optional) — token for private repos
+    The token is fetched at runtime from the SDK API via ``get_github_token()``
+    and injected into ``git clone`` through a temp GIT_ASKPASS script (never
+    embedded in the clone URL). This matches the openSWE pattern: the sandbox
+    pod never receives ``GITHUB_TOKEN`` as an env var.
     """
 
     def __init__(
@@ -44,10 +48,8 @@ class GitBackend:
         owner: str | None = None,
         repo: str | None = None,
         token: str | None = None,
-        branch: str = DEFAULT_BRANCH,
     ) -> None:
         self.git_ref = git_ref
-        self.branch = branch
         self._tmpdir = None
 
         owner = owner or os.environ.get(ENV_OWNER)
@@ -60,7 +62,6 @@ class GitBackend:
             owner=owner,
             repo=repo,
             has_token=_has_token,
-            branch=branch,
             git_ref=git_ref,
         )
 
@@ -70,26 +71,48 @@ class GitBackend:
             raise GitBackendError(f"{ENV_REPO} must be set")
 
         clone_url = f"https://github.com/{owner}/{repo}.git"
-        if token:
-            clone_url = f"https://{token}@github.com/{owner}/{repo}.git"
 
         self._tmpdir = Path(tempfile.mkdtemp(prefix="gitbackend-"))
         workdir = self._tmpdir / "repo"
 
-        _masked_url = f"https://{owner}/{repo}.git"
         logger.info(
             "git_backend_clone_cmd",
             repo=f"{owner}/{repo}",
-            branch=branch,
             git_ref=git_ref,
             tmpdir=str(self._tmpdir),
             has_auth=_has_token,
         )
 
+        # ── Prepare auth via GIT_ASKPASS (openSWE pattern) ──────────────
+        # Instead of embedding the token in the clone URL (which leaks it
+        # via `ps aux`), write a temp askpass script that git prompts for
+        # credentials. The script is removed immediately after the clone.
+        askpass_path = None
+        env = os.environ.copy()
+        if token:
+            fd, askpass_path = tempfile.mkstemp(suffix=".sh", prefix="git-askpass-")
+            with os.fdopen(fd, "w") as f:
+                f.write("#!/bin/sh\n")
+                f.write('case "$1" in\n')
+                f.write('  *Username*) echo "x-access-token" ;;\n')
+                f.write(f'  *Password*) echo "{token}" ;;\n')
+                f.write('  *)           echo "x-access-token" ;;\n')
+                f.write("esac\n")
+            os.chmod(askpass_path, stat.S_IRUSR | stat.S_IXUSR)
+            env["GIT_ASKPASS"] = askpass_path
+            env["GIT_TERMINAL_PROMPT"] = "0"
+
         _t0 = time.monotonic()
-        args = ["git", "clone", "--depth", "1", "--branch", branch, clone_url, str(workdir)]
-        result = subprocess.run(args, capture_output=True, text=True, timeout=120)
+        args = ["git", "clone", "--depth", "1", clone_url, str(workdir)]
+        result = subprocess.run(args, env=env, capture_output=True, text=True, timeout=120)
         _elapsed = time.monotonic() - _t0
+
+        # Clean up askpass script immediately
+        if askpass_path:
+            try:
+                os.unlink(askpass_path)
+            except OSError:
+                pass
 
         logger.info(
             "git_backend_clone_done",
@@ -107,28 +130,28 @@ class GitBackend:
             )
 
         sub = workdir / git_ref
-        logger.info(
-            "git_backend_navigate_subfolder",
-            subfolder=str(sub),
-            exists=sub.exists(),
-            is_dir=sub.is_dir() if sub.exists() else None,
-        )
-
         if not sub.exists():
             _entries = [str(p.relative_to(workdir)) for p in workdir.rglob("*")][:50]
-            logger.error(
-                "git_backend_subfolder_missing",
+            logger.warning(
+                "git_backend_subfolder_missing_creating_empty",
                 git_ref=git_ref,
                 repo_contents=_entries,
             )
-            shutil.rmtree(self._tmpdir, ignore_errors=True)
-            raise GitBackendError(
-                f"subfolder '{git_ref}' not found in cloned repo. "
-                f"Repo root has {len(_entries)} visible entries."
+            sub.mkdir(parents=True, exist_ok=True)
+        elif not sub.is_dir():
+            logger.warning(
+                "git_backend_subfolder_not_dir_removing_and_recreating",
+                git_ref=git_ref,
             )
-        if not sub.is_dir():
-            shutil.rmtree(self._tmpdir, ignore_errors=True)
-            raise GitBackendError(f"'{git_ref}' is not a directory")
+            shutil.rmtree(str(sub))
+            sub.mkdir(parents=True, exist_ok=True)
+
+        logger.info(
+            "git_backend_navigate_subfolder",
+            subfolder=str(sub),
+            exists=True,
+            is_dir=True,
+        )
 
         self.path = sub.resolve()
 
@@ -138,7 +161,6 @@ class GitBackend:
         logger.info(
             "git_backend_ready",
             git_ref=git_ref,
-            branch=branch,
             path=str(self.path),
             file_count=len(_files),
             sample_files=_files[:10],

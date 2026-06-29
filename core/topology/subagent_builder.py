@@ -48,6 +48,15 @@ except ImportError:
 
 from langchain.agents.middleware import HumanInTheLoopMiddleware
 
+try:
+    from core.middleware.github_middleware import GitHubMiddleware
+    from core.middleware.github_middleware import execute_shell as _git_execute_shell
+    from core.middleware.github_middleware import open_pull_request as _git_open_pull_request
+
+    HAS_GITHUB_MIDDLEWARE = True
+except ImportError:
+    HAS_GITHUB_MIDDLEWARE = False
+
 logger = structlog.get_logger(__name__)
 
 
@@ -114,16 +123,36 @@ def build_subagent(
         tool_names = specialist_config.get("tools", [])
         filtered_tools: List[BaseTool] = []
 
+        missing_from_available: list[str] = []
         for tool_name in tool_names:
             if tool_name in available_tools:
                 filtered_tools.append(available_tools[tool_name])
             else:
+                missing_from_available.append(tool_name)
                 logger.warning(
                     "tool_not_found_for_subagent",
                     agent_name=agent_name,
                     tool_name=tool_name,
                     available_tools=list(available_tools.keys()),
                 )
+
+        resolved_tools: list[str] = []
+        if missing_from_available and HAS_GITHUB_MIDDLEWARE:
+            _GIT_TOOL_MAP = {
+                "execute_shell": _git_execute_shell,
+                "open_pull_request": _git_open_pull_request,
+            }
+            for name in missing_from_available:
+                tool_fn = _GIT_TOOL_MAP.get(name)
+                if tool_fn is not None:
+                    filtered_tools.append(tool_fn)
+                    resolved_tools.append(name)
+                    logger.info(
+                        "resolved_middleware_tool",
+                        agent_name=agent_name,
+                        tool_name=name,
+                        source="GitHubMiddleware",
+                    )
 
         if not filtered_tools:
             logger.warning(
@@ -232,6 +261,14 @@ def _build_compiled_subagent(
             PatchToolCallsMiddleware(),  # type: ignore
         ]
     )
+    if HAS_GITHUB_MIDDLEWARE:
+        tool_names = specialist_config.get("tools", [])
+        if any(t in tool_names for t in ("execute_shell", "open_pull_request")):
+            middleware_stack.append(GitHubMiddleware())  # type: ignore
+            logger.info(
+                "added_github_middleware",
+                agent_name=agent_name,
+            )
     if specialist_config.get("interrupt_on"):
         middleware_stack.append(
             HumanInTheLoopMiddleware(interrupt_on=specialist_config["interrupt_on"])

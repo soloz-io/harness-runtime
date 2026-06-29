@@ -137,6 +137,9 @@ def write_agent_output_files(
                     elif filepath.startswith("workspace/"):
                         filepath = filepath[10:]
                     filename = Path(filepath).name
+                    if filepath.startswith("skills/") and len(Path(filepath).parts) > 2:
+                        # Strip the 'skills/' prefix to preserve the intermediate folders
+                        filename = filepath[7:]
                     fmt = "markdown" if filepath.endswith(".md") else "json"
                     ext = Path(filepath).suffix.lower()
                     media_type = _MEDIA_TYPES.get(ext, "text/plain")
