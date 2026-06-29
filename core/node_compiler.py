@@ -14,7 +14,7 @@ try:
     from langchain.agents import create_agent
     from langchain.agents.middleware import HumanInTheLoopMiddleware, TodoListMiddleware
 
-    from core.human_interaction import HumanInteractionMiddleware
+    from core.middleware.human_interaction import HumanInteractionMiddleware
 except ImportError as e:
     raise ImportError(
         "deepagents package is required but not installed. "
@@ -44,7 +44,9 @@ def build_node_middleware(
     if interrupt_on_config:
         middleware.append(HumanInTheLoopMiddleware(interrupt_on=interrupt_on_config))
     if response_format:
-        from core.structured_output import StructuredOutputMappingMiddleware  # noqa: PLC0415
+        from core.middleware.structured_output import (
+            StructuredOutputMappingMiddleware,  # noqa: PLC0415
+        )
 
         middleware.append(StructuredOutputMappingMiddleware())
     return middleware
@@ -62,7 +64,7 @@ def compile_node(
     provider = model_cfg.get("provider", "openai")
     model_name = model_cfg.get("model_name") or model_cfg.get("model")
 
-    from core.structured_output import (  # noqa: PLC0415
+    from core.middleware.structured_output import (  # noqa: PLC0415
         resolve_structured_output_model,
     )
 

@@ -7,10 +7,10 @@ from typing import Any, Dict, Optional
 from langchain_core.runnables import Runnable
 from langchain_core.tools import BaseTool
 
-from core.acrylic_topology import AcrylicTopologyBuilder
 from core.interfaces import TopologyBuilder
-from core.star_topology import StarTopologyBuilder
 from core.tool_loader import load_tools_from_definition
+from core.topology.acrylic_topology import AcrylicTopologyBuilder
+from core.topology.star_topology import StarTopologyBuilder
 
 
 def build_agent_from_definition(

@@ -28,10 +28,10 @@ acrylic DAG.
 
 from core.factory import build_agent_from_definition
 from core.model_identifier import create_model_identifier
-from core.subagent_builder import SubAgentCompilationError, build_subagent
 
 # Modular functions
 from core.tool_loader import ToolLoadingError, load_tools_from_definition
+from core.topology.subagent_builder import SubAgentCompilationError, build_subagent
 
 __all__ = [
     # Main API

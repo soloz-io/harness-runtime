@@ -19,8 +19,8 @@ from typing import Any, Dict, List
 import structlog
 from langchain_core.tools import BaseTool
 
+from core.middleware.rubric_middleware import build_rubric_middlewares
 from core.model_identifier import create_model_identifier
-from core.rubric_middleware import build_rubric_middlewares
 
 # Import deep agents pattern components
 # Note: The spec requires deepagents package with create_deep_agent and CompiledSubAgent
@@ -30,7 +30,7 @@ try:
     from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
     from langchain.agents import create_agent
 
-    from core.human_interaction import HumanInteractionMiddleware
+    from core.middleware.human_interaction import HumanInteractionMiddleware
     from core.state_schema_builder import create_state_schema_from_config
 
     DEEPAGENTS_AVAILABLE = True

@@ -164,6 +164,8 @@ def get_mock_model_with_event_replay():
             return self
 
         def with_structured_output(self, schema, **kwargs):
+            from core.middleware.structured_output import ToolStrategy
+
             """Structured output method for compatibility."""
             print("[MOCK] LLM with_structured_output called")
             return self

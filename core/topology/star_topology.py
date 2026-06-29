@@ -10,11 +10,11 @@ from typing import Any, Dict, List
 import structlog
 from langchain_core.runnables import Runnable
 
-from core.human_interaction import HumanInteractionMiddleware
 from core.interfaces import TopologyBuilder
-from core.rubric_middleware import build_rubric_middlewares
-from core.structured_output import build_tool_strategy, resolve_structured_output_model
-from core.subagent_builder import build_subagent
+from core.middleware.human_interaction import HumanInteractionMiddleware
+from core.middleware.rubric_middleware import build_rubric_middlewares
+from core.middleware.structured_output import build_tool_strategy, resolve_structured_output_model
+from core.topology.subagent_builder import build_subagent
 
 try:
     from deepagents import create_deep_agent
@@ -23,6 +23,22 @@ except ImportError as e:
         "deepagents package is required but not installed. "
         "Install it with: pip install deepagents>=0.2.0"
     ) from e
+
+try:
+    from deepagents.backends import CompositeBackend, StateBackend
+except ImportError:
+    CompositeBackend = None  # type: ignore[assignment,misc]
+    StateBackend = None  # type: ignore[assignment,misc]
+
+try:
+    from deepagents.backends.filesystem import FilesystemBackend
+except ImportError:
+    FilesystemBackend = None  # type: ignore[assignment,misc]
+
+try:
+    from core.integration.git_backend import GitBackend
+except ImportError:
+    GitBackend = None  # type: ignore[assignment,misc]
 
 logger = structlog.get_logger(__name__)
 
@@ -125,6 +141,8 @@ class StarTopologyBuilder(TopologyBuilder):
         interrupt_on_config = orchestrator_actual_config.get("interrupt_on")
         rubric_config = orchestrator_actual_config.get("rubric")
 
+        git_ref = orchestrator_actual_config.get("gitRef")
+
         deep_agent_kwargs: dict[str, Any] = {
             "model": resolve_structured_output_model(
                 provider=orchestrator_provider,
@@ -153,6 +171,64 @@ class StarTopologyBuilder(TopologyBuilder):
         if orchestrator_context_schema is not None:
             deep_agent_kwargs["context_schema"] = orchestrator_context_schema
 
+        # ── Git-backed skills ─────────────────────────────────────────────
+        if git_ref:
+            logger.info("git_ref_present", git_ref=git_ref)
+
+            if GitBackend is None:
+                raise ImportError(
+                    "gitRef requires GitBackend — core.integration.git_backend not available"
+                )
+            if CompositeBackend is None or StateBackend is None:
+                raise ImportError("gitRef requires deepagents >= 0.6.8")
+            if FilesystemBackend is None:
+                raise ImportError(
+                    "gitRef requires deepagents.backends.filesystem.FilesystemBackend"
+                )
+
+            logger.info("git_ref_start_clone", git_ref=git_ref)
+            cloner = GitBackend(git_ref)
+            logger.info(
+                "git_ref_clone_done",
+                git_ref=git_ref,
+                local_path=str(cloner.path),
+            )
+
+            logger.info(
+                "git_ref_create_filesystem_backend", root_dir=str(cloner.path), virtual_mode=True
+            )
+            skills_backend = FilesystemBackend(
+                root_dir=str(cloner.path),
+                virtual_mode=True,
+            )
+
+            logger.info(
+                "git_ref_create_composite_backend", route="/skills/", default_backend="StateBackend"
+            )
+            composite_backend = CompositeBackend(
+                default=StateBackend(),
+                routes={"/skills/": skills_backend},
+            )
+
+            # SkillsMiddleware is auto-wired by create_deep_agent when
+            # both skills=["/skills/"] and backend=composite_backend are passed.
+            logger.info(
+                "git_ref_wire_deep_agent_kwargs",
+                backend_type=type(composite_backend).__name__,
+                skills=["/skills/"],
+            )
+            deep_agent_kwargs["backend"] = composite_backend
+            deep_agent_kwargs["skills"] = ["/skills/"]
+
+        else:
+            logger.info("git_ref_absent_no_git_skills")
+
+        logger.info(
+            "create_deep_agent_start",
+            has_backend="backend" in deep_agent_kwargs,
+            has_skills="skills" in deep_agent_kwargs,
+            skills=deep_agent_kwargs.get("skills"),
+        )
         main_runnable = create_deep_agent(**deep_agent_kwargs)
 
         logger.info(
@@ -167,6 +243,7 @@ class StarTopologyBuilder(TopologyBuilder):
             sub_agent_count=len(compiled_subagents),
             total_tools=len(available_tools),
             graph_type="deep_agent",
+            skills_configured=bool(git_ref),
         )
 
         return main_runnable

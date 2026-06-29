@@ -11,16 +11,15 @@ Currently the orchestrator receives a static `system_prompt` string in the defin
 
 - Domain expertise (research methodologies, review rubrics, brand guidelines) must be embedded directly in prompts at design time.
 - Workflow designers cannot reference curated resource catalogs (skills, MCP server configs, agent definitions, prompts) maintained in a central repository.
-- Agents cannot read or update their own skill content during execution — edits are lost across runs.
 - There is no integration path from AgentRegistry, which stores all resource kinds (MCPServer, Skill, Agent, Prompt) as `Repository`-referenced artifacts (`reference/solo/agentregistry/pkg/api/v1alpha1/common.go`).
 
 The harness-runtime has zero skills middleware wired (ADR-016 in waypoint project, proposed). Specialists must remain lean with isolated context — they receive only the `task()` delegation message (ADR-011:40).
 
 ## Decision
 
-### 1. Orchestrator receives a GitBackend via CompositeBackend
+### 1. Orchestrator receives git-backed skills via CompositeBackend
 
-The orchestrator is the only node that receives a `GitBackend`. Specialists are plain langchain agents (per ADR-011) and do not get skills, git access, or `SkillsMiddleware`. This preserves specialist context isolation — specialists receive only the `task()` delegation message and operate on the shared filesystem via `FilesystemMiddleware`.
+The orchestrator is the only node that receives git-backed skills. Specialists are plain langchain agents (per ADR-011) and do not get skills, git access, or `SkillsMiddleware`. This preserves specialist context isolation — specialists receive only the `task()` delegation message and operate on the shared filesystem via `FilesystemMiddleware`.
 
 ### 2. Environment variables define the base repository
 
@@ -31,11 +30,13 @@ The orchestrator is the only node that receives a `GitBackend`. Specialists are 
 | `GITHUB_TOKEN` | No | Token for private repository access (standard GitHub convention) |
 
 The harness-runtime constructs the clone URL as:
+
 ```
 https://github.com/{HARNESS_GIT_OWNER}/{HARNESS_GIT_REPO}.git
 ```
 
 When `GITHUB_TOKEN` is set, the URL is adjusted to include token auth:
+
 ```
 https://{GITHUB_TOKEN}@github.com/{HARNESS_GIT_OWNER}/{HARNESS_GIT_REPO}.git
 ```
@@ -51,37 +52,37 @@ The `agent-dag-schema.json` adds a `gitRef` field to `nodes[].config`, required 
 
 The default branch is `main`. Definitions without `gitRef` work unchanged — no `GitBackend` is created and no `SkillsMiddleware` is wired.
 
-### 4. GitBackend implements BackendProtocol
+### 4. GitBackend — pure cloner, no BackendProtocol
 
-`GitBackend` is a new class in `harness-runtime/backends/git_backend.py` implementing `deepagents.backends.protocol.BackendProtocol`. It:
+`GitBackend` is a new class in `harness-runtime/backends/git_backend.py`. It does **not** implement `BackendProtocol`. Its sole responsibility is cloning:
 
-1. **At construction**: Shallow clones the repo (`git clone --depth 1 --branch main`) to a temp directory, navigates to `gitRef` subfolder.
-2. **On read** (`read_file`, `ls`, `glob`, `grep`): Reads directly from the cloned working tree.
-3. **On write** (`write_file`, `edit_file`): Modifies files in the working tree and records a timeline journal entry at `.timeline/{file}.yaml` with `{timestamp, agent_id, run_id, decision_context}`.
-4. **On sync** (`sync()`): Calls `git add`, `git commit`, `git push` for all changes since last sync. On push conflict, reads the timeline journal and may surface decisions back to the orchestrator (not part of this ADR — deferred to future HITL integration).
+1. **At construction**: Shallow clones the repo (`git clone --depth 1 --branch main`) to a temp directory, navigates to `gitRef` subfolder, exposes the local path via `self.path`.
+2. **No other methods**: Read/write/list/grep/glob operations are handled by deepagents built-in `FilesystemBackend` and `SkillsMiddleware` on the local filesystem. `GitBackend.cleanup()` removes the temp directory.
 
-### 5. Sync points
-
-`GitBackend.sync()` is called at exactly two points in the orchestrator's execution lifecycle:
-
-1. **Before summarization**: When `SummarizationMiddleware.wrap_model_call()` offloads conversation history to the backend. This ensures skill edits are persisted before messages are summarized and context is trimmed.
-2. **Before result emission**: When the runtime is about to call `publisher.publish_result()` (`core/executor.py:492-536`) — both for HITL interrupts (`__interrupt__` detected) and final graph completion. This ensures the user sees the latest skill content before any pause or termination.
-
-### 6. CompositeBackend wiring
+### 5. CompositeBackend wiring
 
 The star topology builder creates a `CompositeBackend` for the orchestrator:
 
 ```python
-GitBackend(
-    composite=CompositeBackend(
-        default=StateBackend(),
-        routes={"/skills/": GitBackend(git_ref=orchestrator.config.gitRef)}
-    ),
-    sources=["/skills/"],
+cloner = GitBackend(git_ref)
+skills_backend = FilesystemBackend(
+    root_dir=str(cloner.path), virtual_mode=True,
+)
+composite_backend = CompositeBackend(
+    default=StateBackend(),
+    routes={"/skills/": skills_backend},
+)
+
+create_deep_agent(
+    ...,
+    backend=composite_backend,
+    skills=["/skills/"],
 )
 ```
 
-`SkillsMiddleware` discovers skills via `backend.ls("/skills/")` and lazy-loads them via `read_file` (progressive disclosure per deepagents/middleware/skills.py). The cloned repo's subfolder may contain any resource type (skills, configs, prompts) — the `CompositeBackend` presents a unified filesystem view.
+`SkillsMiddleware` (auto-wired by `create_deep_agent` when both `backend` and `skills` are provided) discovers skills via `backend.ls("/skills/")` and lazy-loads them via `backend.read()` (progressive disclosure per deepagents/middleware/skills.py). The cloned repo's subfolder may contain any resource type (skills, configs, prompts) — the `CompositeBackend` presents a unified filesystem view with `/skills/` routed to the cloned directory and all other paths served by `StateBackend`.
+
+All file operations use deepagents built-in tools (`FilesystemMiddleware`'s `read_file`, `ls_file`, etc.) operating on the `FilesystemBackend`. `GitBackend` itself has no runtime role after construction.
 
 ## Ownership
 
@@ -89,7 +90,7 @@ This ADR defines architectural constraints and does not own platform resources. 
 
 | Resource Class | System of Record | Lifecycle Owner | Reconciler | Consumer | Phase |
 |---|---|---|---|---|---|
-| Orchestrator skills content | Git repository (`HARNESS_GIT_OWNER`/`HARNESS_GIT_REPO`) | Workflow designer | GitBackend (clone at init, push at sync points) | SkillsMiddleware → orchestrator LLM context | Day-0 |
+| Orchestrator skills content | Git repository (`HARNESS_GIT_OWNER`/`HARNESS_GIT_REPO`) | Workflow designer | GitBackend (clone at init only) | SkillsMiddleware → orchestrator LLM context | Day-0 |
 | `gitRef` definition | `agent-dag-schema.json` nodes[].config | Workflow designer | Schema validation | Harness-runtime topology builder | Day-0 |
 | Git auth token | Environment (`GITHUB_TOKEN`) | Platform operator | Runtime env injection | GitBackend clone auth | Day-1+ |
 
@@ -99,22 +100,21 @@ This ADR defines architectural constraints and does not own platform resources. 
 
 - **Reusable resource catalogs**: Workflows reference curated repositories instead of embedding domain knowledge in prompts.
 - **Context isolation preserved**: Specialists remain lean — only the orchestrator has git-backed skills.
-- **Agent-editable content**: The orchestrator can update skills during execution via `write_file`/`edit_file`, with changes persisted back to git.
-- **Crash safety via sync points**: Two explicit sync points (summarization and result emission) bound the window of lost edits.
+- **Read-only, zero overhead**: No sync, no write-back, no conflict resolution. GitBacked skills are injected at startup and served via existing deepagents built-ins.
 - **AgentRegistry compatible**: `gitRef` maps directly to AgentRegistry's `Repository.Subfolder` pattern, enabling future registry integration.
 - **Backwards compatible**: Omitted `gitRef` means no GitBackend; existing definitions work unchanged.
 - **Single repo per org**: Multiple workflows share one org-level repo with different subfolders, reducing repository sprawl.
 
 ### Negative
 
-- **Availability dependency**: The git repo must be reachable at clone time and at every sync point. Offline environments need a local mirror.
+- **Availability dependency**: The git repo must be reachable at clone time. Offline environments need a local mirror.
 - **Auth surface**: `GITHUB_TOKEN` in environment variables is a secret management concern shared with the platform operator.
-- **No push conflict resolution in v1**: On push conflict, the sync fails silently (edits stay local). HITL-based conflict resolution is deferred.
 - **Clone latency**: `git clone --depth 1` adds startup latency proportional to repo size, even when only a subfolder is needed.
+- **No sync** in v1: Skill edits during a run are not persisted back to git (no `write_file` to `/skills/`). Future work may add HITL-based conflict resolution.
 
 ## Impact
 
-This ADR does not amend any existing ADR. It extends the star topology builder defined in ADR-011 and the middleware stack composition defined in ADR-012. The `GitBackend` is a new middleware-provided tool pathway following the pattern established in ADR-010.
+This ADR does not amend any existing ADR. It extends the star topology builder defined in ADR-011 and the middleware stack composition defined in ADR-012. The `GitBackend` is a new utility class consumed at graph-build time by `star_topology.py`.
 
 The `agent-dag-schema.json` (`packages/wpt-engine/schemas/agent-dag-schema.json`) must be updated to add `gitRef` as a field on `nodes[].config.properties`.
 
@@ -122,12 +122,10 @@ The `agent-dag-schema.json` (`packages/wpt-engine/schemas/agent-dag-schema.json`
 
 - ADR-011: Topology Builder Split — Star (create_deep_agent) vs Acrylic (create_agent)
 - ADR-012: Middleware Stack Composition — middleware ordering and injection
-- ADR-010: Builtin Tool Architecture — middleware-provided tool pattern
-- ADR-013: HITL / interrupt_on Protocol — result frame emission lifecycle
 - ADR-016 (waypoint project): Agent Context Layer — Memory and Skills Management (proposed)
+- `backends/git_backend.py`: `GitBackend` — pure cloner
+- `core/star_topology.py`: CompositeBackend + FilesystemBackend wiring for git-backed skills
+- `deepagents/backends/composite.py`: CompositeBackend routing
+- `deepagents/backends/filesystem.py`: FilesystemBackend with virtual_mode
+- `deepagents/middleware/skills.py`: SkillsMiddleware discovery and lazy-loading
 - `reference/solo/agentregistry/pkg/api/v1alpha1/common.go` — Repository struct (URL, Branch, Commit, Subfolder)
-- `reference/solo/agentregistry/internal/cli/common/gitutil/gitutil.go` — ParseGitHubURL, CloneAndCopy
-- `reference/langchain/deepagents/libs/deepagents/deepagents/backends/composite.py` — CompositeBackend routing
-- `reference/langchain/deepagents/libs/deepagents/deepagents/middleware/skills.py` — SkillsMiddleware
-- `reference/langchain/deepagents/libs/deepagents/deepagents/middleware/summarization.py` — SummarizationMiddleware sync point
-- `core/executor.py` — `publish_result()` at lines 492, 525, 536 (result emission sync point)

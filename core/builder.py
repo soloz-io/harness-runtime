@@ -58,9 +58,9 @@ import structlog
 from langchain_core.runnables import Runnable
 
 from core.custom_graph_builder import build_custom_state_graph, is_custom_topology
-from core.structured_output import build_tool_strategy, resolve_structured_output_model
-from core.subagent_builder import build_subagent
+from core.middleware.structured_output import build_tool_strategy, resolve_structured_output_model
 from core.tool_loader import load_tools_from_definition
+from core.topology.subagent_builder import build_subagent
 
 # Import deep agents pattern components
 # Note: The spec requires deepagents package with create_deep_agent and CompiledSubAgent
