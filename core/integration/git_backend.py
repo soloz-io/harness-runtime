@@ -154,6 +154,7 @@ class GitBackend:
         )
 
         self.path = sub.resolve()
+        self.repo_path = workdir.resolve()
 
         _files = [
             str(p.relative_to(self.path)) for p in sorted(self.path.rglob("*")) if p.is_file()
