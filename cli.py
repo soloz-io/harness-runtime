@@ -33,6 +33,63 @@ structlog.configure(
 logger = structlog.get_logger(__name__)
 
 
+def _setup_otel() -> None:
+    """Initialize OpenTelemetry if the OTLP endpoint is configured.
+
+    Configurable via standard OTEL environment variables:
+      - OTEL_EXPORTER_OTLP_ENDPOINT  (default: http://localhost:4318)
+      - OTEL_SERVICE_NAME            (default: harness-runtime)
+      - OTEL_RESOURCE_ATTRIBUTES
+    """
+    otel_endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+    if not otel_endpoint:
+        logger.info("otel_disabled_no_endpoint")
+        return
+
+    try:
+        from opentelemetry import trace
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+        from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+        from opentelemetry.sdk.resources import Resource
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+        service_name = os.getenv("OTEL_SERVICE_NAME", "harness-runtime")
+
+        provider = TracerProvider(
+            resource=Resource.create(
+                {
+                    "service.name": service_name,
+                    "service.version": "0.1.13",
+                }
+            ),
+        )
+        exporter = OTLPSpanExporter(endpoint=otel_endpoint)
+        provider.add_span_processor(BatchSpanProcessor(exporter))
+        trace.set_tracer_provider(provider)
+
+        # Auto-instrumentation
+        try:
+            FastAPIInstrumentor().instrument()
+        except Exception:
+            logger.warning("otel_fastapi_instrument_failed", exc_info=True)
+
+        try:
+            HTTPXClientInstrumentor().instrument()
+        except Exception:
+            logger.warning("otel_httpx_instrument_failed", exc_info=True)
+
+        logger.info("otel_initialized", endpoint=otel_endpoint, service=service_name)
+
+    except ImportError:
+        logger.warning(
+            "opentelemetry packages not installed — run `pip install harness-runtime[otel]`",
+        )
+    except Exception:
+        logger.warning("otel_init_failed", exc_info=True)
+
+
 def _start_redis() -> None:
     redis_port = os.getenv("REDIS_PORT", "6379")
     try:
@@ -54,6 +111,8 @@ def main() -> None:
         "openai",
         ProviderProfile(init_kwargs={"use_responses_api": False}),
     )
+
+    _setup_otel()
 
     database_url = os.getenv("DATABASE_URL")
     if not database_url:

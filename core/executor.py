@@ -82,6 +82,13 @@ class ExecutionManager:
         self.publisher = publisher
         self.postgres_connection_string = postgres_connection_string
         self.checkpointer: Optional[PostgresSaver] = None
+        self._tracer = None
+        try:
+            from opentelemetry import trace as _otel_trace
+
+            self._tracer = _otel_trace.get_tracer("harness-runtime", "0.1.13")
+        except Exception:
+            pass
         self._checkpointer_context: Optional[_GeneratorContextManager[PostgresSaver]] = None
         self._async_checkpointer: Optional[AsyncPostgresSaver] = None
         self._async_checkpointer_context: Any = None
@@ -568,6 +575,14 @@ class ExecutionManager:
         num_turns: int = 1,
         resume_payload: Optional[Any] = None,
     ) -> str:
+        tracer = self._tracer
+        span = None
+        if tracer:
+            span = tracer.start_span("harness.graph.execute")
+            span.set_attribute("session.id", session_id)
+            span.set_attribute("model.name", model_name)
+            span.set_attribute("num.turns", num_turns)
+
         start_time = time.time()
         state = self._init_event_state()
 
@@ -603,9 +618,11 @@ class ExecutionManager:
                     num_turns,
                 )
                 if not ok:
+                    if span:
+                        span.end()
                     return ""
 
-            return self._publish_final_result(
+            result = self._publish_final_result(
                 state,
                 publisher,
                 session_id,
@@ -613,8 +630,20 @@ class ExecutionManager:
                 num_turns,
             )
 
+            if span:
+                span.set_attribute("duration_ms", int((time.time() - start_time) * 1000))
+                span.end()
+
+            return result
+
         except Exception as e:
             logger.error("graph_execution_failed", error=str(e))
+
+            if span:
+                span.record_exception(e)
+                span.set_attribute("error", True)
+                span.end()
+
             return self._publish_final_result(
                 state,
                 publisher,
@@ -635,6 +664,13 @@ class ExecutionManager:
         num_turns: int = 1,
         resume_payload: Optional[Any] = None,
     ) -> str:
+        tracer = self._tracer
+        span = None
+        if tracer:
+            span = tracer.start_span("harness.graph.execute.sync")
+            span.set_attribute("session.id", session_id)
+            span.set_attribute("model.name", model_name)
+
         start_time = time.time()
         state = self._init_event_state()
 
@@ -668,9 +704,11 @@ class ExecutionManager:
                     num_turns,
                 )
                 if not ok:
+                    if span:
+                        span.end()
                     return ""
 
-            return self._publish_final_result(
+            result = self._publish_final_result(
                 state,
                 self.publisher,
                 session_id,
@@ -678,8 +716,20 @@ class ExecutionManager:
                 num_turns,
             )
 
+            if span:
+                span.set_attribute("duration_ms", int((time.time() - start_time) * 1000))
+                span.end()
+
+            return result
+
         except Exception as e:
             logger.error("graph_execution_failed", error=str(e))
+
+            if span:
+                span.record_exception(e)
+                span.set_attribute("error", True)
+                span.end()
+
             return self._publish_final_result(
                 state,
                 self.publisher,
