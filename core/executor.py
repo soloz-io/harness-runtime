@@ -13,7 +13,6 @@ rather than post-hoc 60-character chunks.
 import json
 import time
 import uuid
-from contextlib import _GeneratorContextManager
 from typing import Any, Optional
 
 import psycopg
@@ -74,14 +73,19 @@ class ExecutionError(Exception):
 
 
 class ExecutionManager:
-    def __init__(
+    def _init_common(
         self,
         postgres_connection_string: str,
         publisher: EventPublisher,
     ) -> None:
         self.publisher = publisher
         self.postgres_connection_string = postgres_connection_string
-        self.checkpointer: Optional[PostgresSaver] = None
+        self.checkpointer = None
+        self._checkpointer_context = None
+        self._async_checkpointer = None
+        self._async_checkpointer_context = None
+        self._pool = None
+        self._async_pool = None
         self._tracer = None
         try:
             from opentelemetry import trace as _otel_trace
@@ -89,11 +93,13 @@ class ExecutionManager:
             self._tracer = _otel_trace.get_tracer("harness-runtime", "0.1.13")
         except Exception:
             pass
-        self._checkpointer_context: Optional[_GeneratorContextManager[PostgresSaver]] = None
-        self._async_checkpointer: Optional[AsyncPostgresSaver] = None
-        self._async_checkpointer_context: Any = None
-        self._pool: Optional[ConnectionPool] = None
-        self._async_pool: Optional[AsyncConnectionPool] = None
+
+    def __init__(
+        self,
+        postgres_connection_string: str,
+        publisher: EventPublisher,
+    ) -> None:
+        self._init_common(postgres_connection_string, publisher)
         if postgres_connection_string:
             self._pool = ConnectionPool(postgres_connection_string, min_size=1, max_size=5)
             self._setup_checkpointer()
@@ -116,14 +122,7 @@ class ExecutionManager:
         publisher: EventPublisher,
     ) -> "ExecutionManager":
         self = cls.__new__(cls)
-        self.publisher = publisher
-        self.postgres_connection_string = postgres_connection_string
-        self.checkpointer = None
-        self._checkpointer_context = None
-        self._async_checkpointer = None
-        self._async_checkpointer_context = None
-        self._pool = None
-        self._async_pool = None
+        self._init_common(postgres_connection_string, publisher)
         if postgres_connection_string:
             self._pool = ConnectionPool(postgres_connection_string, min_size=1, max_size=5)
             await self._async_setup_checkpointer()
