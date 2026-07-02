@@ -1,9 +1,11 @@
 """GitBackend — pure cloner. Clones a git repo subfolder to a local temp directory.
 
-Auth follows the openSWE proxy pattern: the GitHub token is fetched at runtime
-from the control plane API (never passed as an env var to the pod), and injected
-into git via a temporary GIT_ASKPASS script rather than embedded in the clone
-URL. This keeps the token out of process listings and git error logs.
+Auth is handled by the Agent Vault sidecar MITM proxy. The harness container
+has ``HTTPS_PROXY`` set (sourced from ``/shared/proxy.env`` at startup), and
+Agent Vault injects the correct GitHub credentials for all outbound git HTTPS
+traffic. ``GIT_TERMINAL_PROMPT=0`` is set so git fails immediately instead of
+prompting, and a dummy credential helper is provided to satisfy git's auth
+negotiation before the proxy rewrites the request.
 
 All file operations (read, ls, grep, glob) are handled by deepagents built-in
 ``FilesystemBackend`` and ``SkillsMiddleware``. This class does NOT implement
@@ -12,7 +14,6 @@ All file operations (read, ls, grep, glob) are handled by deepagents built-in
 
 import os
 import shutil
-import stat
 import subprocess
 import tempfile
 import time
@@ -20,12 +21,10 @@ from pathlib import Path
 
 import structlog
 
-from .github_auth import get_github_token
-
 logger = structlog.get_logger(__name__)
 
-ENV_OWNER = "HARNESS_GIT_OWNER"
-ENV_REPO = "HARNESS_GIT_REPO"
+ENV_OWNER = "AGENTREGISTRY_GIT_OWNER"
+ENV_REPO = "AGENTREGISTRY_GIT_REPO"
 
 
 class GitBackendError(Exception):
@@ -35,10 +34,11 @@ class GitBackendError(Exception):
 class GitBackend:
     """Clone a git repo subfolder and expose its local path.
 
-    The token is fetched at runtime from the SDK API via ``get_github_token()``
-    and injected into ``git clone`` through a temp GIT_ASKPASS script (never
-    embedded in the clone URL). This matches the openSWE pattern: the sandbox
-    pod never receives ``GITHUB_TOKEN`` as an env var.
+    Uses the Agent Vault MITM proxy for authentication: ``HTTPS_PROXY`` is
+    already set in the container env (sourced from ``/shared/proxy.env``).
+    ``GIT_TERMINAL_PROMPT=0`` prevents interactive prompts; a dummy
+    ``x-access-token`` credential is passed so git completes its auth
+    handshake and lets the proxy inject the real token.
     """
 
     def __init__(
@@ -47,21 +47,17 @@ class GitBackend:
         *,
         owner: str | None = None,
         repo: str | None = None,
-        token: str | None = None,
     ) -> None:
         self.git_ref = git_ref
         self._tmpdir = None
 
         owner = owner or os.environ.get(ENV_OWNER)
         repo = repo or os.environ.get(ENV_REPO)
-        token = token or get_github_token()
 
-        _has_token = token is not None
         logger.info(
             "git_backend_resolve_env",
             owner=owner,
             repo=repo,
-            has_token=_has_token,
             git_ref=git_ref,
         )
 
@@ -80,39 +76,25 @@ class GitBackend:
             repo=f"{owner}/{repo}",
             git_ref=git_ref,
             tmpdir=str(self._tmpdir),
-            has_auth=_has_token,
         )
 
-        # ── Prepare auth via GIT_ASKPASS (openSWE pattern) ──────────────
-        # Instead of embedding the token in the clone URL (which leaks it
-        # via `ps aux`), write a temp askpass script that git prompts for
-        # credentials. The script is removed immediately after the clone.
-        askpass_path = None
+        # ── Auth via Agent Vault proxy ──────────────────────────────
+        # HTTPS_PROXY is sourced from /shared/proxy.env before uvicorn starts,
+        # so it's already in os.environ. We set GIT_TERMINAL_PROMPT=0 so git
+        # never blocks waiting for TTY input, and embed a dummy placeholder
+        # credential in the URL so git's auth handshake completes. The MITM
+        # proxy rewrites the Authorization header with the real GitHub token.
         env = os.environ.copy()
-        if token:
-            fd, askpass_path = tempfile.mkstemp(suffix=".sh", prefix="git-askpass-")
-            with os.fdopen(fd, "w") as f:
-                f.write("#!/bin/sh\n")
-                f.write('case "$1" in\n')
-                f.write('  *Username*) echo "x-access-token" ;;\n')
-                f.write(f'  *Password*) echo "{token}" ;;\n')
-                f.write('  *)           echo "x-access-token" ;;\n')
-                f.write("esac\n")
-            os.chmod(askpass_path, stat.S_IRUSR | stat.S_IXUSR)
-            env["GIT_ASKPASS"] = askpass_path
-            env["GIT_TERMINAL_PROMPT"] = "0"
+        env["GIT_TERMINAL_PROMPT"] = "0"
+
+        # Embed a placeholder credential so git doesn't prompt. Agent Vault
+        # replaces this with the real token during the HTTPS intercept.
+        clone_url_with_cred = clone_url.replace("https://", "https://x-access-token:placeholder@")
 
         _t0 = time.monotonic()
-        args = ["git", "clone", "--depth", "1", clone_url, str(workdir)]
+        args = ["git", "clone", "--depth", "1", clone_url_with_cred, str(workdir)]
         result = subprocess.run(args, env=env, capture_output=True, text=True, timeout=120)
         _elapsed = time.monotonic() - _t0
-
-        # Clean up askpass script immediately
-        if askpass_path:
-            try:
-                os.unlink(askpass_path)
-            except OSError:
-                pass
 
         logger.info(
             "git_backend_clone_done",

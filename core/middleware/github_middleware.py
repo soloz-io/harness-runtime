@@ -11,8 +11,6 @@ import structlog
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.tools import tool
 
-from core.integration.github_auth import get_github_token
-
 logger = structlog.get_logger(__name__)
 
 
@@ -68,6 +66,11 @@ def open_pull_request(
 ) -> dict:
     """Open a GitHub pull request via the REST API.
 
+    Authentication is handled transparently by the Agent Vault sidecar
+    proxy. The request to ``api.github.com`` is routed through the proxy,
+    which injects the correct bearer token. No token is fetched or stored
+    in the harness process.
+
     Use this to OPEN a NEW pull request. Push your branch with
     `git push origin <branch>` BEFORE calling this tool. For everything else —
     updating an existing PR, marking it ready for review — use `GH_TOKEN=dummy gh pr edit`
@@ -92,16 +95,8 @@ def open_pull_request(
         "open_pull_request", owner=owner, repo=repo, head=head, base=base, title=title, draft=draft
     )
 
-    token = get_github_token()
-    if not token:
-        return {
-            "success": False,
-            "error": "Failed to open PR: GitHub token not available (WAYPOINT_SDK_BASE_URL or resolution failed)",
-        }
-
     headers = {
         "Accept": "application/vnd.github+json",
-        "Authorization": f"Bearer {token}",
         "X-GitHub-Api-Version": "2022-11-28",
     }
     payload = {

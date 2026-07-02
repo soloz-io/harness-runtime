@@ -25,20 +25,20 @@ The orchestrator is the only node that receives git-backed skills. Specialists a
 
 | Variable | Required | Description |
 |---|---|---|
-| `HARNESS_GIT_OWNER` | Yes | GitHub organization or user (e.g. `acme`) |
-| `HARNESS_GIT_REPO` | Yes | GitHub repository name (e.g. `agent-resources`) |
-| `GITHUB_TOKEN` | No | Token for private repository access (standard GitHub convention) |
+| `AGENTREGISTRY_GIT_OWNER` | Yes | GitHub organization or user (e.g. `acme`) |
+| `AGENTREGISTRY_GIT_REPO` | Yes | GitHub repository name (e.g. `agent-resources`) |
+| `AGENTREGISTRY_GITHUB_TOKEN` | No | Token for private repository access (standard GitHub convention) |
 
 The harness-runtime constructs the clone URL as:
 
 ```
-https://github.com/{HARNESS_GIT_OWNER}/{HARNESS_GIT_REPO}.git
+https://github.com/{AGENTREGISTRY_GIT_OWNER}/{AGENTREGISTRY_GIT_REPO}.git
 ```
 
-When `GITHUB_TOKEN` is set, the URL is adjusted to include token auth:
+When `AGENTREGISTRY_GITHUB_TOKEN` is set, the URL is adjusted to include token auth:
 
 ```
-https://{GITHUB_TOKEN}@github.com/{HARNESS_GIT_OWNER}/{HARNESS_GIT_REPO}.git
+https://{AGENTREGISTRY_GITHUB_TOKEN}@github.com/{AGENTREGISTRY_GIT_OWNER}/{AGENTREGISTRY_GIT_REPO}.git
 ```
 
 ### 3. `gitRef` field on orchestrator node
@@ -90,9 +90,9 @@ This ADR defines architectural constraints and does not own platform resources. 
 
 | Resource Class | System of Record | Lifecycle Owner | Reconciler | Consumer | Phase |
 |---|---|---|---|---|---|
-| Orchestrator skills content | Git repository (`HARNESS_GIT_OWNER`/`HARNESS_GIT_REPO`) | Workflow designer | GitBackend (clone at init only) | SkillsMiddleware → orchestrator LLM context | Day-0 |
+| Orchestrator skills content | Git repository (`AGENTREGISTRY_GIT_OWNER`/`AGENTREGISTRY_GIT_REPO`) | Workflow designer | GitBackend (clone at init only) | SkillsMiddleware → orchestrator LLM context | Day-0 |
 | `gitRef` definition | `agent-dag-schema.json` nodes[].config | Workflow designer | Schema validation | Harness-runtime topology builder | Day-0 |
-| Git auth token | Environment (`GITHUB_TOKEN`) | Platform operator | Runtime env injection | GitBackend clone auth | Day-1+ |
+| Git auth token | Environment (`AGENTREGISTRY_GITHUB_TOKEN`) | Platform operator | Runtime env injection | GitBackend clone auth | Day-1+ |
 
 ## Consequences
 

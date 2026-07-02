@@ -13,4 +13,11 @@ if [ -z "${DATABASE_URL:-}" ]; then
     exit 1
 fi
 
+# Source proxy config from Agent Vault sidecar (shared volume)
+if [ -f /shared/proxy.env ]; then
+    set -a
+    . /shared/proxy.env
+    set +a
+fi
+
 exec harness-runtime

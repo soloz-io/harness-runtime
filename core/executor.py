@@ -811,6 +811,12 @@ def _serialize_messages_for_values(messages: list) -> list[dict[str, Any]]:
         tool_calls = getattr(msg, "tool_calls", [])
         if tool_calls:
             entry["tool_calls"] = tool_calls
+        tool_call_id = getattr(msg, "tool_call_id", None)
+        if tool_call_id:
+            entry["tool_call_id"] = tool_call_id
+        name = getattr(msg, "name", None)
+        if name:
+            entry["name"] = name
         additional_kwargs = getattr(msg, "additional_kwargs", {})
         if additional_kwargs:
             entry["additional_kwargs"] = additional_kwargs

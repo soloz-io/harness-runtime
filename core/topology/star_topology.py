@@ -219,15 +219,15 @@ class StarTopologyBuilder(TopologyBuilder):
                 },
             )
             # SkillsMiddleware is auto-wired by create_deep_agent when
-            # both skills=["/skills/"] and backend=composite_backend are passed.
+            # both skills=["/workspace/skills/"] and backend=composite_backend are passed.
             logger.info(
                 "git_ref_wire_deep_agent_kwargs",
                 backend_type=type(composite_backend).__name__,
-                skills=["/skills/"],
+                skills=["/workspace/skills/"],
             )
             deep_agent_kwargs["backend"] = composite_backend
-            deep_agent_kwargs["skills"] = ["/skills/"]
-            deep_agent_kwargs["memory"] = ["/memory/"]
+            deep_agent_kwargs["skills"] = ["/workspace/skills/"]
+            deep_agent_kwargs["memory"] = ["/workspace/memory/"]
 
         else:
             logger.info("git_ref_absent_no_git_skills")

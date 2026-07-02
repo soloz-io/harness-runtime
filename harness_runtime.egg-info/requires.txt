@@ -24,3 +24,11 @@ ruff>=0.1.13
 mypy>=1.8.0
 ty>=0.0.46
 jsonschema>=4.20.0
+
+[otel]
+opentelemetry-distro[otlp]>=0.50b0
+opentelemetry-instrumentation>=0.50b0
+opentelemetry-instrumentation-fastapi>=0.50b0
+opentelemetry-instrumentation-redis>=0.50b0
+opentelemetry-instrumentation-httpx>=0.50b0
+opentelemetry-instrumentation-asyncio>=0.50b0

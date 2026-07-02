@@ -4,6 +4,9 @@ pyproject.toml
 api/__init__.py
 api/main.py
 api/publisher.py
+api/routers/__init__.py
+api/routers/health.py
+api/routers/sessions.py
 core/__init__.py
 core/ask_user.py
 core/builder.py
@@ -20,6 +23,17 @@ core/review_content.py
 core/session.py
 core/state_schema_builder.py
 core/tool_loader.py
+core/integration/__init__.py
+core/integration/git_backend.py
+core/middleware/__init__.py
+core/middleware/github_middleware.py
+core/middleware/human_interaction.py
+core/middleware/rubric_middleware.py
+core/middleware/structured_output.py
+core/topology/__init__.py
+core/topology/acrylic_topology.py
+core/topology/star_topology.py
+core/topology/subagent_builder.py
 harness_runtime.egg-info/PKG-INFO
 harness_runtime.egg-info/SOURCES.txt
 harness_runtime.egg-info/dependency_links.txt
