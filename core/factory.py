@@ -17,6 +17,10 @@ def build_agent_from_definition(
     definition: Dict[str, Any],
     checkpointer: Any = None,
     extra_tools: Optional[Dict[str, BaseTool]] = None,
+    *,
+    workspace_id: str | None = None,
+    session_id: str | None = None,
+    db_pool: Any = None,
 ) -> Runnable[Any, Any]:
     """
     Build a complete LangGraph graph from an agent definition.
@@ -47,4 +51,11 @@ def build_agent_from_definition(
         builder = StarTopologyBuilder()
 
     # 4. Build graph
-    return builder.build(definition, available_tools, checkpointer)
+    return builder.build(
+        definition,
+        available_tools,
+        checkpointer,
+        workspace_id=workspace_id,
+        session_id=session_id,
+        db_pool=db_pool,
+    )

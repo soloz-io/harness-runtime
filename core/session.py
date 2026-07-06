@@ -26,14 +26,18 @@ class Session:
         publisher: EventPublisher,
         mcp_servers: Optional[list[dict[str, Any]]] = None,
         session_id: Optional[str] = None,
+        workspace_id: str = "",
     ) -> None:
         self.session_id = session_id or f"sess_{uuid.uuid4().hex[:24]}"
+        self.workspace_id = workspace_id
         self.agent_definition = agent_definition
         self.base_payload = input_payload
         self.execution_manager = execution_manager
         self.publisher = publisher
         self.turns = 0
         self.mcp_servers = mcp_servers or []
+        if not workspace_id:
+            raise ValueError("workspace_id is required")
         self.mcp_tools: dict[str, Any] = {}
         self.mcp_handles: list[Any] = []
         self.model_name: str | None = None
@@ -83,6 +87,11 @@ class Session:
             self.agent_definition,
             checkpointer=self.checkpointer,
             extra_tools=self.mcp_tools if self.mcp_tools else None,
+            workspace_id=self.workspace_id,
+            session_id=self.session_id,
+            db_pool=self.execution_manager._pool
+            if hasattr(self.execution_manager, "_pool")
+            else None,
         )
 
         resume = getattr(self, "resume_payload", None)
@@ -112,6 +121,11 @@ class Session:
             self.agent_definition,
             checkpointer=self.checkpointer,
             extra_tools=self.mcp_tools if self.mcp_tools else None,
+            workspace_id=self.workspace_id,
+            session_id=self.session_id,
+            db_pool=self.execution_manager._pool
+            if hasattr(self.execution_manager, "_pool")
+            else None,
         )
 
         resume = getattr(self, "resume_payload", None)
@@ -133,6 +147,11 @@ class Session:
             self.agent_definition,
             checkpointer=self.checkpointer,
             extra_tools=self.mcp_tools if self.mcp_tools else None,
+            workspace_id=self.workspace_id,
+            session_id=self.session_id,
+            db_pool=self.execution_manager._pool
+            if hasattr(self.execution_manager, "_pool")
+            else None,
         )
         result = self.execution_manager.execute(
             graph=compiled_graph,

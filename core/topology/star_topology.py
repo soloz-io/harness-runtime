@@ -24,22 +24,6 @@ except ImportError as e:
         "Install it with: pip install deepagents>=0.2.0"
     ) from e
 
-try:
-    from deepagents.backends import CompositeBackend, StateBackend
-except ImportError:
-    CompositeBackend = None  # type: ignore[assignment,misc]
-    StateBackend = None  # type: ignore[assignment,misc]
-
-try:
-    from deepagents.backends.filesystem import FilesystemBackend
-except ImportError:
-    FilesystemBackend = None  # type: ignore[assignment,misc]
-
-try:
-    from core.integration.git_backend import GitBackend
-except ImportError:
-    GitBackend = None  # type: ignore[assignment,misc]
-
 logger = structlog.get_logger(__name__)
 
 
@@ -51,6 +35,10 @@ class StarTopologyBuilder(TopologyBuilder):
         definition: Dict[str, Any],
         available_tools: Dict[str, Any],
         checkpointer: Any,
+        *,
+        workspace_id: str | None = None,
+        session_id: str | None = None,
+        db_pool: Any = None,
     ) -> Runnable[Any, Any]:
         """Build the start topology graph."""
         nodes = definition.get("nodes", [])
@@ -141,8 +129,6 @@ class StarTopologyBuilder(TopologyBuilder):
         interrupt_on_config = orchestrator_actual_config.get("interrupt_on")
         rubric_config = orchestrator_actual_config.get("rubric")
 
-        git_ref = orchestrator_actual_config.get("gitRef")
-
         deep_agent_kwargs: dict[str, Any] = {
             "model": resolve_structured_output_model(
                 provider=orchestrator_provider,
@@ -171,72 +157,25 @@ class StarTopologyBuilder(TopologyBuilder):
         if orchestrator_context_schema is not None:
             deep_agent_kwargs["context_schema"] = orchestrator_context_schema
 
-        # ── Git-backed skills ─────────────────────────────────────────────
-        if git_ref:
-            logger.info("git_ref_present", git_ref=git_ref)
-
-            if GitBackend is None:
-                raise ImportError(
-                    "gitRef requires GitBackend — core.integration.git_backend not available"
-                )
-            if CompositeBackend is None or StateBackend is None:
-                raise ImportError("gitRef requires deepagents >= 0.6.8")
-            if FilesystemBackend is None:
-                raise ImportError(
-                    "gitRef requires deepagents.backends.filesystem.FilesystemBackend"
-                )
-
-            logger.info("git_ref_start_clone", git_ref=git_ref)
-            cloner = GitBackend(git_ref)
-            logger.info(
-                "git_ref_clone_done",
-                git_ref=git_ref,
-                local_path=str(cloner.path),
-            )
+        # ── Artifact / session backend ────────────────────────────────────
+        if workspace_id and session_id and db_pool:
+            from core.backends.artifact import ArtifactBackend
 
             logger.info(
-                "git_ref_create_filesystem_backend", root_dir=str(cloner.path), virtual_mode=True
+                "artifact_backend_wiring",
+                workspace_id=workspace_id,
+                session_id=session_id,
             )
-            skills_backend = FilesystemBackend(
-                root_dir=str(cloner.repo_path / "workspace" / "skills"),
-                virtual_mode=True,
+            backend = ArtifactBackend(
+                workspace_id=workspace_id,
+                session_id=session_id,
+                pool=db_pool,
             )
-            memory_backend = FilesystemBackend(
-                root_dir=str(cloner.repo_path / "workspace" / "memory"),
-                virtual_mode=True,
-            )
-
-            logger.info(
-                "git_ref_create_composite_backend",
-                route="/skills/, /memory/, and /workspace/",
-                default_backend="StateBackend",
-            )
-            composite_backend = CompositeBackend(
-                default=StateBackend(),
-                routes={
-                    "/workspace/skills/": skills_backend,
-                    "/workspace/memory/": memory_backend,
-                },
-            )
-            # SkillsMiddleware is auto-wired by create_deep_agent when
-            # both skills=["/workspace/skills/"] and backend=composite_backend are passed.
-            logger.info(
-                "git_ref_wire_deep_agent_kwargs",
-                backend_type=type(composite_backend).__name__,
-                skills=["/workspace/skills/"],
-            )
-            deep_agent_kwargs["backend"] = composite_backend
-            deep_agent_kwargs["skills"] = ["/workspace/skills/"]
-            deep_agent_kwargs["memory"] = ["/workspace/memory/"]
-
-        else:
-            logger.info("git_ref_absent_no_git_skills")
+            deep_agent_kwargs["backend"] = backend
 
         logger.info(
             "create_deep_agent_start",
             has_backend="backend" in deep_agent_kwargs,
-            has_skills="skills" in deep_agent_kwargs,
-            skills=deep_agent_kwargs.get("skills"),
         )
         main_runnable = create_deep_agent(**deep_agent_kwargs)
 
@@ -252,7 +191,6 @@ class StarTopologyBuilder(TopologyBuilder):
             sub_agent_count=len(compiled_subagents),
             total_tools=len(available_tools),
             graph_type="deep_agent",
-            skills_configured=bool(git_ref),
         )
 
         return main_runnable

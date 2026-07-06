@@ -139,6 +139,17 @@ async def handle_message(session_id: str, body: dict[str, Any]) -> dict[str, Any
     agent_definition = body.get("agent_definition")
     input_payload = body.get("input_payload", {})
     resume_payload = body.get("resume_payload")
+    workspace_id = body.get("workspace_id") or os.environ.get("WORKSPACE_ID")
+
+    if not workspace_id:
+        logger.warning(
+            "workspace_id not provided — ArtifactBackend will be unavailable "
+            "(set workspace_id in POST body or WORKSPACE_ID env var)"
+        )
+        raise HTTPException(
+            status_code=400,
+            detail="workspace_id is required (set in POST body or WORKSPACE_ID env var)",
+        )
 
     if session_id in _session_store:
         state = _session_store[session_id]
@@ -165,6 +176,7 @@ async def handle_message(session_id: str, body: dict[str, Any]) -> dict[str, Any
                 execution_manager=_execution_manager,
                 publisher=publisher,
                 session_id=session_id,
+                workspace_id=workspace_id,
             )
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e)) from e

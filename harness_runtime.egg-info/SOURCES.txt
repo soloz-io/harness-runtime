@@ -4,6 +4,7 @@ pyproject.toml
 api/__init__.py
 api/main.py
 api/publisher.py
+api/registry.py
 api/routers/__init__.py
 api/routers/health.py
 api/routers/sessions.py
@@ -23,6 +24,8 @@ core/review_content.py
 core/session.py
 core/state_schema_builder.py
 core/tool_loader.py
+core/backends/__init__.py
+core/backends/artifact.py
 core/integration/__init__.py
 core/integration/git_backend.py
 core/middleware/__init__.py
