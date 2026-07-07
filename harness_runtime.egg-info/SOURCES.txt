@@ -4,7 +4,6 @@ pyproject.toml
 api/__init__.py
 api/main.py
 api/publisher.py
-api/registry.py
 api/routers/__init__.py
 api/routers/health.py
 api/routers/sessions.py

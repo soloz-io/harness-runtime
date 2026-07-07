@@ -12,7 +12,6 @@ Requires-Dist: langchain>=1.0.0
 Requires-Dist: langchain-openai>=0.3.0
 Requires-Dist: langchain-anthropic>=1.0.0
 Requires-Dist: langsmith>=0.2.0
-Requires-Dist: psycopg[binary,pool]>=3.2.0
 Requires-Dist: structlog>=24.4.0
 Requires-Dist: python-dotenv>=1.0.0
 Requires-Dist: fastapi>=0.115.0

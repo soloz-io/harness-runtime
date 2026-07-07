@@ -1,7 +1,4 @@
 from fastapi import APIRouter
-from fastapi.responses import JSONResponse
-
-from api.registry import is_registration_complete
 
 router = APIRouter(tags=["health"])
 
@@ -12,7 +9,5 @@ async def health() -> dict[str, str]:
 
 
 @router.get("/healthz/ready")
-async def healthz_ready() -> JSONResponse:
-    if is_registration_complete():
-        return JSONResponse({"status": "ok"})
-    return JSONResponse({"status": "not_ready"}, status_code=503)
+async def healthz_ready() -> dict[str, str]:
+    return {"status": "ok"}
