@@ -20,3 +20,4 @@ dist
 .mypy_cache
 log
 harness_runtime.egg-info
+references
