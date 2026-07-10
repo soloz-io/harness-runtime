@@ -21,10 +21,7 @@ The new modular architecture provides:
 
 New Modular Structure:
     - core/factory.py: Main entry point (build_agent_from_definition)
-    - core/tools/: Tool loading logic
-    - core/models/: Model identifier creation
-    - core/subagents/: Subagent compilation logic
-    - core/custom_graph_builder.py: Custom DAG topology (ADR-005 Path B)
+    - core/topology/: Topology builders (star, acrylic)
     - core/structured_output.py: Structured I/O (ToolStrategy, DeepSeek thinking disable)
 
 Migration Guide:
@@ -57,7 +54,6 @@ from typing import Any, Dict, List
 import structlog
 from langchain_core.runnables import Runnable
 
-from core.custom_graph_builder import build_custom_state_graph, is_custom_topology
 from core.middleware.structured_output import build_tool_strategy, resolve_structured_output_model
 from core.tool_loader import load_tools_from_definition
 from core.topology.subagent_builder import build_subagent
@@ -132,17 +128,6 @@ class GraphBuilder:
             # Step 1: Load all tools
             tool_definitions = definition.get("tool_definitions", [])
             available_tools = load_tools_from_definition(tool_definitions)
-
-            # Step 1b: Check for custom topology (ADR-005 Path B escape hatch)
-            # When present, compile a native StateGraph instead of the default
-            # create_deep_agent star topology.
-            if is_custom_topology(definition):
-                logger.info("detected_custom_topology_building_state_graph")
-                return build_custom_state_graph(
-                    definition,
-                    available_tools,
-                    self.checkpointer,
-                )
 
             # Step 2: Parse nodes from definition
             nodes = definition.get("nodes", [])

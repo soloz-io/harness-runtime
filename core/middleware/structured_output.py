@@ -36,6 +36,13 @@ def _patched_convert_message_to_dict(
     result = _original_convert_message_to_dict(message, api)
     if isinstance(message, AIMessage) and "reasoning_content" in message.additional_kwargs:
         result["reasoning_content"] = message.additional_kwargs["reasoning_content"]
+    # Strip invalid_tool_call content blocks — OpenAI API rejects them
+    if isinstance(result.get("content"), list):
+        result["content"] = [
+            block
+            for block in result["content"]
+            if not (isinstance(block, dict) and block.get("type") == "invalid_tool_call")
+        ]
     return result
 
 

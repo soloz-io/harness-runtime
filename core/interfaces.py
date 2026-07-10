@@ -18,6 +18,7 @@ class TopologyBuilder(Protocol):
         workspace_id: str | None = None,
         session_id: str | None = None,
         db_pool: Any = None,
+        backend: Any = None,
     ) -> Runnable[Any, Any]:
         """Compile and return a runnable graph based on the specific topology strategy.
 
@@ -28,6 +29,7 @@ class TopologyBuilder(Protocol):
             workspace_id: The workspace/workflow ID for cross-session artifact access.
             session_id: The current session ID (excluded from artifact queries).
             db_pool: A sync PostgreSQL connection pool for artifact DB queries.
+            backend: Pre-built ArtifactBackend instance (takes priority over workspace_id/session_id/db_pool).
 
         Returns:
             A runnable graph.

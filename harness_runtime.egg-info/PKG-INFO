@@ -5,7 +5,7 @@ Summary: LangGraph Agent Execution Engine — HTTP server mode
 Author: Bizmatters Team
 Requires-Python: >=3.11
 Description-Content-Type: text/markdown
-Requires-Dist: deepagents>=0.6.8
+Requires-Dist: deepagents[quickjs]>=0.6.8
 Requires-Dist: langgraph>=1.0.0
 Requires-Dist: langgraph-checkpoint-postgres>=3.0.0
 Requires-Dist: langchain>=1.0.0

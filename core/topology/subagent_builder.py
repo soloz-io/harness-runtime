@@ -20,7 +20,7 @@ import structlog
 from langchain_core.tools import BaseTool
 
 from core.middleware.rubric_middleware import build_rubric_middlewares
-from core.model_identifier import create_model_identifier
+from core.model_factory import ModelFactory
 
 # Import deep agents pattern components
 # Note: The spec requires deepagents package with create_deep_agent and CompiledSubAgent
@@ -116,8 +116,11 @@ def build_subagent(
         # Support both "model_name" and "model" field names
         model_name = model_config.get("model") or model_config.get("model_name", "gpt-4.1.mini")
 
-        # Create model identifier
-        model_identifier = create_model_identifier(provider, model_name)
+        # Create model instance (avoids deepagents profile forcing use_responses_api=True)
+        model_instance = ModelFactory.create_model(
+            provider=provider,
+            model_name=model_name,
+        )
 
         # Filter tools for this specialist
         tool_names = specialist_config.get("tools", [])
@@ -190,7 +193,7 @@ def build_subagent(
             # PATH A: Create CompiledSubAgent with custom state schema / rubric
             return _build_compiled_subagent(
                 agent_name,
-                model_identifier,
+                model_instance,
                 system_prompt,
                 filtered_tools,
                 specialist_config,
@@ -203,7 +206,7 @@ def build_subagent(
             #            create_deep_agent's top-level interrupt_on parameter.
             return _build_subagent_dict(
                 agent_name,
-                model_identifier,
+                model_instance,
                 system_prompt,
                 filtered_tools,
                 brief_description,
@@ -222,7 +225,7 @@ def build_subagent(
 
 def _build_compiled_subagent(
     agent_name: str,
-    model_identifier: str,
+    model_instance: Any,
     system_prompt: str,
     filtered_tools: List[BaseTool],
     specialist_config: Dict[str, Any],
@@ -249,9 +252,7 @@ def _build_compiled_subagent(
     # Prepend rubric middleware if configured
     rubric_config = specialist_config.get("rubric")
     if rubric_config:
-        # Resolve model to BaseChatModel or identifier format required by DeepAgents
-        # We pass the model_identifier string directly, and RubricMiddleware will lazily initialize or complain
-        rubric_middlewares = build_rubric_middlewares(rubric_config, model_identifier)
+        rubric_middlewares = build_rubric_middlewares(rubric_config, model_instance)
         middleware_stack.extend(rubric_middlewares)
 
     middleware_stack.extend(
@@ -275,7 +276,7 @@ def _build_compiled_subagent(
         )
 
     create_agent_kwargs: dict[str, Any] = {
-        "model": model_identifier,
+        "model": model_instance,
         "system_prompt": system_prompt,
         "tools": filtered_tools,
         "middleware": middleware_stack,
@@ -297,7 +298,7 @@ def _build_compiled_subagent(
     logger.info(
         "subagent_compiled_successfully",
         agent_name=agent_name,
-        model_identifier=model_identifier,
+        model_identifier=str(model_instance),
         tool_count=len(filtered_tools),
         tool_names=[getattr(t, "name", str(t)) for t in filtered_tools],
         has_state_schema=bool(state_schema_config),
@@ -309,7 +310,7 @@ def _build_compiled_subagent(
 
 def _build_subagent_dict(
     agent_name: str,
-    model_identifier: str,
+    model_instance: Any,
     system_prompt: str,
     filtered_tools: List[BaseTool],
     brief_description: str,
@@ -328,7 +329,7 @@ def _build_subagent_dict(
         "description": brief_description,
         "system_prompt": system_prompt,
         "tools": filtered_tools,
-        "model": model_identifier,
+        "model": model_instance,
     }
     if response_format is not None:
         subagent_dict["response_format"] = response_format
@@ -336,7 +337,7 @@ def _build_subagent_dict(
     logger.info(
         "subagent_dict_created",
         agent_name=agent_name,
-        model_identifier=model_identifier,
+        model_identifier=str(model_instance),
         tool_count=len(filtered_tools),
         tool_names=[getattr(t, "name", str(t)) for t in filtered_tools],
         has_state_schema=False,

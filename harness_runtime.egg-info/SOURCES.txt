@@ -10,11 +10,11 @@ api/routers/sessions.py
 core/__init__.py
 core/ask_user.py
 core/builder.py
+core/embedded_tool_loader.py
 core/event_publisher.py
 core/executor.py
 core/factory.py
 core/interfaces.py
-core/mcp_loader.py
 core/message_writer.py
 core/model_factory.py
 core/model_identifier.py
@@ -23,6 +23,7 @@ core/review_content.py
 core/session.py
 core/state_schema_builder.py
 core/tool_loader.py
+core/tool_registry.py
 core/backends/__init__.py
 core/backends/artifact.py
 core/integration/__init__.py

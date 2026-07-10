@@ -33,6 +33,11 @@ class AcrylicTopologyBuilder(TopologyBuilder):
         definition: Dict[str, Any],
         available_tools: Dict[str, Any],
         checkpointer: Any,
+        *,
+        workspace_id: str | None = None,
+        session_id: str | None = None,
+        db_pool: Any = None,
+        backend: Any = None,
     ) -> Runnable[Any, Any]:
         """Compile a custom StateGraph from raw_agent_definition nodes & edges."""
         nodes = definition.get("nodes", [])

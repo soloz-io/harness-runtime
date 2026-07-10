@@ -9,10 +9,11 @@ from typing import Any, Optional
 
 import structlog
 
+from core.embedded_tool_loader import ToolLoadingError, load_tool_implementations
 from core.event_publisher import EventPublisher
 from core.executor import ExecutionManager
 from core.factory import build_agent_from_definition
-from core.mcp_loader import load_mcp_tools_from_servers
+from core.tool_registry import ToolRegistry
 
 logger = structlog.get_logger(__name__)
 
@@ -24,7 +25,6 @@ class Session:
         input_payload: dict[str, Any],
         execution_manager: ExecutionManager,
         publisher: EventPublisher,
-        mcp_servers: Optional[list[dict[str, Any]]] = None,
         session_id: Optional[str] = None,
         workspace_id: str = "",
     ) -> None:
@@ -35,11 +35,11 @@ class Session:
         self.execution_manager = execution_manager
         self.publisher = publisher
         self.turns = 0
-        self.mcp_servers = mcp_servers or []
         if not workspace_id:
             raise ValueError("workspace_id is required")
-        self.mcp_tools: dict[str, Any] = {}
-        self.mcp_handles: list[Any] = []
+        self._tool_registry: ToolRegistry | None = None
+        self._initialized = False
+        self._backend: Any = None
         self.model_name: str | None = None
         nodes = agent_definition.get("nodes", [])
         if nodes:
@@ -54,16 +54,31 @@ class Session:
             )
         self.checkpointer = execution_manager.checkpointer
 
-    async def initialize_async(self) -> None:
-        if self.mcp_servers:
-            mcp_tools, handles = await load_mcp_tools_from_servers(self.mcp_servers)
-            self.mcp_tools = mcp_tools
-            self.mcp_handles = handles
-            logger.info(
-                "mcp_tools_loaded",
-                count=len(mcp_tools),
-                servers=[s.get("name") for s in self.mcp_servers],
+        # Build ArtifactBackend once — reused for tool loading + graph wiring
+        if hasattr(self.execution_manager, "_pool") and self.execution_manager._pool is not None:
+            from core.backends.artifact import ArtifactBackend
+
+            self._backend = ArtifactBackend(
+                workspace_id=self.workspace_id,
+                session_id=self.session_id,
+                pool=self.execution_manager._pool,
             )
+
+    async def _ensure_initialized(self) -> None:
+        if self._initialized:
+            return
+
+        self._tool_registry = ToolRegistry()
+
+        tool_definitions = self.agent_definition.get("tool_definitions", [])
+        if tool_definitions:
+            try:
+                load_tool_implementations(tool_definitions, self._tool_registry)
+            except ToolLoadingError as e:
+                logger.error("tool_loading_failed", error=str(e))
+                raise
+
+        self._initialized = True
 
     def initialize(self, resume_payload: Optional[Any] = None) -> None:
         if resume_payload:
@@ -75,6 +90,8 @@ class Session:
     async def async_run_turn(
         self, user_content: str = "", publisher: Optional[EventPublisher] = None
     ) -> str:
+        await self._ensure_initialized()
+
         self.turns += 1
 
         input_payload = dict(self.base_payload)
@@ -86,12 +103,10 @@ class Session:
         compiled_graph = build_agent_from_definition(
             self.agent_definition,
             checkpointer=self.checkpointer,
-            extra_tools=self.mcp_tools if self.mcp_tools else None,
+            tool_registry=self._tool_registry,
             workspace_id=self.workspace_id,
             session_id=self.session_id,
-            db_pool=self.execution_manager._pool
-            if hasattr(self.execution_manager, "_pool")
-            else None,
+            backend=self._backend,
         )
 
         resume = getattr(self, "resume_payload", None)
@@ -120,12 +135,10 @@ class Session:
         compiled_graph = build_agent_from_definition(
             self.agent_definition,
             checkpointer=self.checkpointer,
-            extra_tools=self.mcp_tools if self.mcp_tools else None,
+            tool_registry=self._tool_registry,
             workspace_id=self.workspace_id,
             session_id=self.session_id,
-            db_pool=self.execution_manager._pool
-            if hasattr(self.execution_manager, "_pool")
-            else None,
+            backend=self._backend,
         )
 
         resume = getattr(self, "resume_payload", None)
@@ -146,12 +159,10 @@ class Session:
         compiled_graph = build_agent_from_definition(
             self.agent_definition,
             checkpointer=self.checkpointer,
-            extra_tools=self.mcp_tools if self.mcp_tools else None,
+            tool_registry=self._tool_registry,
             workspace_id=self.workspace_id,
             session_id=self.session_id,
-            db_pool=self.execution_manager._pool
-            if hasattr(self.execution_manager, "_pool")
-            else None,
+            backend=self._backend,
         )
         result = self.execution_manager.execute(
             graph=compiled_graph,
@@ -165,7 +176,4 @@ class Session:
         return result
 
     async def cleanup(self) -> None:
-        for handle in self.mcp_handles:
-            await handle.cleanup()
-        self.mcp_handles = []
-        self.mcp_tools = {}
+        pass

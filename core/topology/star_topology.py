@@ -9,12 +9,15 @@ from typing import Any, Dict, List
 
 import structlog
 from langchain_core.runnables import Runnable
+from langchain_quickjs import CodeInterpreterMiddleware
 
 from core.interfaces import TopologyBuilder
 from core.middleware.human_interaction import HumanInteractionMiddleware
 from core.middleware.rubric_middleware import build_rubric_middlewares
 from core.middleware.structured_output import build_tool_strategy, resolve_structured_output_model
 from core.topology.subagent_builder import build_subagent
+
+logger = structlog.get_logger(__name__)
 
 try:
     from deepagents import create_deep_agent
@@ -23,8 +26,6 @@ except ImportError as e:
         "deepagents package is required but not installed. "
         "Install it with: pip install deepagents>=0.2.0"
     ) from e
-
-logger = structlog.get_logger(__name__)
 
 
 class StarTopologyBuilder(TopologyBuilder):
@@ -39,6 +40,7 @@ class StarTopologyBuilder(TopologyBuilder):
         workspace_id: str | None = None,
         session_id: str | None = None,
         db_pool: Any = None,
+        backend: Any = None,
     ) -> Runnable[Any, Any]:
         """Build the start topology graph."""
         nodes = definition.get("nodes", [])
@@ -144,6 +146,8 @@ class StarTopologyBuilder(TopologyBuilder):
 
         # Build middlewares starting with Rubric if configured
         middleware_stack = build_rubric_middlewares(rubric_config, deep_agent_kwargs["model"])
+        middleware_stack.append(CodeInterpreterMiddleware(timeout=300))
+        logger.info("code_interpreter_middleware_appended")
         middleware_stack.append(HumanInteractionMiddleware())
         if middleware_stack:
             deep_agent_kwargs["middleware"] = middleware_stack
@@ -158,7 +162,10 @@ class StarTopologyBuilder(TopologyBuilder):
             deep_agent_kwargs["context_schema"] = orchestrator_context_schema
 
         # ── Artifact / session backend ────────────────────────────────────
-        if workspace_id and session_id and db_pool:
+        if backend is not None:
+            deep_agent_kwargs["backend"] = backend
+            logger.info("artifact_backend_wired", backend_provided=True)
+        elif workspace_id and session_id and db_pool:
             from core.backends.artifact import ArtifactBackend
 
             logger.info(

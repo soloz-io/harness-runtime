@@ -30,7 +30,7 @@ def _detect_provider(model_name: str) -> str:
 
 def _resolve_openai_base_url(model_name: str, extra_kwargs: dict[str, Any]) -> str | None:
     """Resolve OpenAI-compatible base URL from env or model prefix."""
-    env_base = os.environ.get("OPENAI_BASE_URL")
+    env_base = os.environ.get("AI_GATEWAY_BASE_URL")
     if env_base:
         return env_base
     if "base_url" in extra_kwargs or "base_url" in os.environ:
@@ -116,19 +116,10 @@ class ModelFactory:
         # may be incorrect for cross-provider models like deepseek via OpenAI API)
         prov = os.environ.get("LLM_PROVIDER") or _detect_provider(model)
 
-        if model.startswith("deepseek"):
-            api_key = os.environ.get("DEEPSEEK_API_KEY") or os.environ.get("OPENAI_API_KEY")
-            if "extra_body" not in extra_kwargs:
-                extra_kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
-        else:
-            api_key = (
-                os.environ.get("OPENAI_API_KEY")
-                or os.environ.get("DEEPSEEK_API_KEY")
-                or os.environ.get("ANTHROPIC_API_KEY")
-            )
+        api_key = os.environ.get("AI_GATEWAY_API_KEY")
         if not api_key:
-            raise ValueError(
-                "No API key found. Set OPENAI_API_KEY, DEEPSEEK_API_KEY, or ANTHROPIC_API_KEY"
-            )
+            raise ValueError("AI_GATEWAY_API_KEY is not set")
+        if model.startswith("deepseek") and "extra_body" not in extra_kwargs:
+            extra_kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
 
         return _create_model_for_provider(prov, model, api_key=api_key, **extra_kwargs)
