@@ -41,11 +41,24 @@ class StarTopologyBuilder(TopologyBuilder):
         session_id: str | None = None,
         db_pool: Any = None,
         backend: Any = None,
+        skills: list[str] | None = None,
+        composite_backend: Any = None,
     ) -> Runnable[Any, Any]:
         """Build the start topology graph."""
         nodes = definition.get("nodes", [])
         if not nodes:
             raise ValueError("Agent definition must contain at least one node")
+
+        # Auto-construct ArtifactBackend when backend not pre-built but DB params available
+        if backend is None and workspace_id and session_id and db_pool is not None:
+            from core.backends.artifact import ArtifactBackend
+
+            backend = ArtifactBackend(
+                workspace_id=workspace_id,
+                session_id=session_id,
+                pool=db_pool,
+            )
+            logger.info("artifact_backend_auto_constructed")
 
         orchestrator_config = None
         specialist_configs = []
@@ -71,7 +84,12 @@ class StarTopologyBuilder(TopologyBuilder):
         compiled_subagents: List[Any] = []
         for specialist_node in specialist_configs:
             specialist_config = specialist_node.get("config", {})
-            sub_agent = build_subagent(specialist_config, available_tools)
+            specialist_skills = specialist_config.get("skills")
+            sub_agent = build_subagent(
+                specialist_config,
+                available_tools,
+                skills=specialist_skills,
+            )
             compiled_subagents.append(sub_agent)
 
         logger.info(
@@ -144,6 +162,21 @@ class StarTopologyBuilder(TopologyBuilder):
             "debug": True,
         }
 
+        # Wire backend + skills into the orchestrator.
+        # CompositeBackend is always wired when available so that SubAgent specs
+        # inherit it and their SkillsMiddleware can resolve skill files under
+        # /workspace/.builder/skills/.  ArtifactBackend is the fallback.
+        orchestrator_skills = orchestrator_actual_config.get("skills")
+        if composite_backend is not None:
+            deep_agent_kwargs["backend"] = composite_backend
+            logger.info("orchestrator_composite_backend_wired")
+        elif backend is not None:
+            deep_agent_kwargs["backend"] = backend
+            logger.info("orchestrator_artifact_backend_wired")
+        if orchestrator_skills:
+            deep_agent_kwargs["skills"] = orchestrator_skills
+            logger.info("orchestrator_skills_wired", skills=orchestrator_skills)
+
         # Build middlewares starting with Rubric if configured
         middleware_stack = build_rubric_middlewares(rubric_config, deep_agent_kwargs["model"])
         middleware_stack.append(CodeInterpreterMiddleware(timeout=300))
@@ -160,25 +193,6 @@ class StarTopologyBuilder(TopologyBuilder):
             deep_agent_kwargs["state_schema"] = orchestrator_state_schema
         if orchestrator_context_schema is not None:
             deep_agent_kwargs["context_schema"] = orchestrator_context_schema
-
-        # ── Artifact / session backend ────────────────────────────────────
-        if backend is not None:
-            deep_agent_kwargs["backend"] = backend
-            logger.info("artifact_backend_wired", backend_provided=True)
-        elif workspace_id and session_id and db_pool:
-            from core.backends.artifact import ArtifactBackend
-
-            logger.info(
-                "artifact_backend_wiring",
-                workspace_id=workspace_id,
-                session_id=session_id,
-            )
-            backend = ArtifactBackend(
-                workspace_id=workspace_id,
-                session_id=session_id,
-                pool=db_pool,
-            )
-            deep_agent_kwargs["backend"] = backend
 
         logger.info(
             "create_deep_agent_start",

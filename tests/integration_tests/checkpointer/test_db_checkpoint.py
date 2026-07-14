@@ -56,6 +56,7 @@ def test_initialize_and_single_turn(sse_server: None) -> None:
             "message": user_content,
             "agent_definition": step["agent_definition"],
             "input_payload": step["input_payload"],
+            "workspace_id": "test-workspace",
         },
         timeout=30.0,
     )
@@ -68,9 +69,10 @@ def test_initialize_and_single_turn(sse_server: None) -> None:
     ) as sse_resp:
         frames = read_sse_frames(sse_resp)
 
-    assert frames[0]["type"] == "system"
-    assert frames[0]["subtype"] == "init"
-    assert frames[0]["session_id"] == session_id
+    # First non-ping event should be lifecycle started
+    first_event = next(f for f in frames if f.get("type") == "event")
+    first_method = first_event.get("method")
+    assert first_method == "lifecycle", f"Expected lifecycle, got {first_method}"
 
     assert frames[-1]["type"] == "result"
     assert frames[-1]["session_id"] == session_id

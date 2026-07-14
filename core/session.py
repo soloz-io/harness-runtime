@@ -40,21 +40,25 @@ class Session:
         self._tool_registry: ToolRegistry | None = None
         self._initialized = False
         self._backend: Any = None
-        self.model_name: str | None = None
+        self._composite_backend: Any = None
+        self._skill_git_backend: Any = None
+        model_name: str | None = None
         nodes = agent_definition.get("nodes", [])
         if nodes:
             node_config = nodes[0].get("config", {})
             model_cfg = node_config.get("model", {})
-            self.model_name = model_cfg.get("model_name") or model_cfg.get("model")
-        if not self.model_name:
+            model_name = model_cfg.get("model_name") or model_cfg.get("model")
+        if not model_name:
             raise ValueError(
                 "No model name found in agent definition. "
                 "Set config.model.model_name in the first node, "
                 "or set LLM_MODEL_NAME env var"
             )
+        self.model_name: str = model_name
         self.checkpointer = execution_manager.checkpointer
 
         # Build ArtifactBackend once — reused for tool loading + graph wiring
+        self._backend = None
         if hasattr(self.execution_manager, "_pool") and self.execution_manager._pool is not None:
             from core.backends.artifact import ArtifactBackend
 
@@ -63,6 +67,59 @@ class Session:
                 session_id=self.session_id,
                 pool=self.execution_manager._pool,
             )
+
+        # Initialize skills backend (CompositeBackend wrapping ArtifactBackend + FilesystemBackend)
+        self._composite_backend = None
+        self._skill_git_backend = None
+        self._init_skills()
+
+    def _init_skills(self) -> None:
+        """Clone skills repo and build CompositeBackend for skills middleware."""
+        skills_paths: list[str] = []
+        for node in self.agent_definition.get("nodes", []):
+            node_skills = node.get("config", {}).get("skills", [])
+            skills_paths.extend(node_skills)
+
+        if not skills_paths:
+            logger.info("no_skills_defined_in_agent_definition")
+            return
+
+        from core.integration.git_backend import GitBackend
+
+        gb = GitBackend("packages/master-chief-agent/src/skills")
+        self._skill_git_backend = gb
+
+        # Symlink wpt-engine CLI into each skill directory
+        cli_src = gb.repo_path / "packages" / "wpt-engine" / "build" / "cli.cjs"
+        if cli_src.exists():
+            for skill_dir in gb.path.iterdir():
+                if skill_dir.is_dir():
+                    engine_dir = skill_dir / "engine"
+                    engine_dir.mkdir(parents=True, exist_ok=True)
+                    symlink_target = engine_dir / "cli.cjs"
+                    if not symlink_target.exists():
+                        symlink_target.symlink_to(cli_src)
+                    logger.info(
+                        "skills_cli_symlinked",
+                        skill=str(skill_dir.name),
+                        target=str(symlink_target),
+                    )
+
+        # Build CompositeBackend for skills
+        # default=ArtifactBackend ensures ALL agents always have DB-backed file access
+        # routes provide filesystem access to skill files for agents that declare skills
+        try:
+            from deepagents.backends.composite import CompositeBackend
+            from deepagents.backends.filesystem import FilesystemBackend
+
+            fs_backend = FilesystemBackend(root_dir=str(gb.path), virtual_mode=True)
+            self._composite_backend = CompositeBackend(
+                default=self._backend,
+                routes={"/workspace/.builder/skills/": fs_backend},
+            )
+            logger.info("composite_backend_built", path=str(gb.path))
+        except ImportError:
+            logger.warning("composite_backend_failed_deepagents_not_available")
 
     async def _ensure_initialized(self) -> None:
         if self._initialized:
@@ -107,6 +164,7 @@ class Session:
             workspace_id=self.workspace_id,
             session_id=self.session_id,
             backend=self._backend,
+            composite_backend=self._composite_backend,
         )
 
         resume = getattr(self, "resume_payload", None)
@@ -139,6 +197,7 @@ class Session:
             workspace_id=self.workspace_id,
             session_id=self.session_id,
             backend=self._backend,
+            composite_backend=self._composite_backend,
         )
 
         resume = getattr(self, "resume_payload", None)
@@ -163,6 +222,7 @@ class Session:
             workspace_id=self.workspace_id,
             session_id=self.session_id,
             backend=self._backend,
+            composite_backend=self._composite_backend,
         )
         result = self.execution_manager.execute(
             graph=compiled_graph,
@@ -176,4 +236,5 @@ class Session:
         return result
 
     async def cleanup(self) -> None:
-        pass
+        if self._skill_git_backend is not None:
+            self._skill_git_backend.cleanup()

@@ -65,6 +65,26 @@ def read_sse_frames(
     return frames
 
 
+def assistant_text_from_frames(frames: list[dict[str, Any]]) -> str:
+    """Extract assistant text from SSE event frames.
+
+    ``SSEEventPublisher`` wraps every event in a protocol envelope::
+
+        {"type": "event", "method": "messages", "params": {
+            "data": {"event": "content-block-delta", "delta": {"text": "..."}}}}
+
+    This helper extracts and concatenates all ``content-block-delta`` text
+    fragments into a single string.
+    """
+    fragments: list[str] = []
+    for f in frames:
+        if f.get("method") == "messages":
+            data = f.get("params", {}).get("data", {})
+            if data.get("event") == "content-block-delta":
+                fragments.append(data.get("delta", {}).get("text", ""))
+    return "".join(fragments)
+
+
 # ---------------------------------------------------------------------------
 # Artifact capture
 # ---------------------------------------------------------------------------

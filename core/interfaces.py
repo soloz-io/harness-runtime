@@ -19,6 +19,8 @@ class TopologyBuilder(Protocol):
         session_id: str | None = None,
         db_pool: Any = None,
         backend: Any = None,
+        skills: list[str] | None = None,
+        composite_backend: Any = None,
     ) -> Runnable[Any, Any]:
         """Compile and return a runnable graph based on the specific topology strategy.
 
@@ -30,6 +32,8 @@ class TopologyBuilder(Protocol):
             session_id: The current session ID (excluded from artifact queries).
             db_pool: A sync PostgreSQL connection pool for artifact DB queries.
             backend: Pre-built ArtifactBackend instance (takes priority over workspace_id/session_id/db_pool).
+            skills: List of skill paths for SkillsMiddleware discovery.
+            composite_backend: Pre-built CompositeBackend for skills file access.
 
         Returns:
             A runnable graph.

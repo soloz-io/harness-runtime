@@ -87,9 +87,10 @@ class GitBackend:
         env = os.environ.copy()
         env["GIT_TERMINAL_PROMPT"] = "0"
 
-        # Embed a placeholder credential so git doesn't prompt. Agent Vault
-        # replaces this with the real token during the HTTPS intercept.
-        clone_url_with_cred = clone_url.replace("https://", "https://x-access-token:placeholder@")
+        # In local dev, use the git token from .env if available.
+        # In production, Agent Vault proxy rewrites the placeholder.
+        git_token = os.environ.get("AGENTREGISTRY_GITHUB_TOKEN", "placeholder")
+        clone_url_with_cred = clone_url.replace("https://", f"https://x-access-token:{git_token}@")
 
         _t0 = time.monotonic()
         args = ["git", "clone", "--depth", "1", clone_url_with_cred, str(workdir)]

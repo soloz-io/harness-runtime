@@ -12,6 +12,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from api.publisher import _SENTINEL, SSEEventPublisher, _stream_key
 from core.executor import ExecutionManager
+from core.integration.git_backend import GitBackendError
 from core.session import Session
 
 logger = structlog.get_logger(__name__)
@@ -178,7 +179,7 @@ async def handle_message(session_id: str, body: dict[str, Any]) -> dict[str, Any
                 session_id=session_id,
                 workspace_id=workspace_id,
             )
-        except ValueError as e:
+        except (ValueError, GitBackendError) as e:
             raise HTTPException(status_code=400, detail=str(e)) from e
         if resume_payload:
             session.initialize(resume_payload=resume_payload)

@@ -11,6 +11,7 @@ from typing import Any
 
 import structlog
 from langchain_core.tools import BaseTool
+from langchain_core.tools import tool as lc_tool
 
 from core.tool_registry import ToolRegistry
 
@@ -64,6 +65,13 @@ def load_tools_from_definition(
             logger.warning("tool_definition_missing_name")
             continue
 
+        # Inline script via runtime.script
+        runtime = tool_def.get("runtime", {})
+        if isinstance(runtime, dict) and "script" in runtime:
+            loaded_tools[tool_name] = _load_inline_script(tool_name, tool_def, runtime["script"])
+            logger.info("tool_resolved_inline_script", tool_name=tool_name)
+            continue
+
         kind = tool_def.get("kind", "app-tool")
 
         if kind == "harness-builtin":
@@ -102,6 +110,40 @@ def load_tools_from_definition(
     )
 
     return loaded_tools
+
+
+def _load_inline_script(name: str, tool_def: dict[str, Any], script: str) -> BaseTool:
+    """Load a tool from an inline Python script (``runtime.script``).
+
+    Executes the script in an isolated namespace and extracts the tool
+    by name.  The script should use ``@tool`` from ``langchain_core.tools``
+    to produce a ``BaseTool`` instance, or define a plain callable.
+    """
+    namespace: dict[str, Any] = {}
+    try:
+        exec(script, namespace)
+    except Exception as e:
+        raise ToolLoadingError(f"Failed to exec inline script for tool '{name}': {e}") from e
+
+    tool_obj = namespace.get(name)
+    if tool_obj is None:
+        raise ToolLoadingError(
+            f"Inline script for tool '{name}' did not define a symbol named '{name}'"
+        )
+
+    if isinstance(tool_obj, BaseTool):
+        return tool_obj
+
+    if callable(tool_obj):
+        t = lc_tool(tool_obj)
+        t.name = name
+        t.description = tool_def.get("description", "")
+        return t
+
+    raise ToolLoadingError(
+        f"Inline script for tool '{name}' defined '{name}' as "
+        f"{type(tool_obj).__name__}, expected a callable or BaseTool"
+    )
 
 
 def _builtin_stub(name: str, tool_def: dict[str, Any]) -> BaseTool:

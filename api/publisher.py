@@ -329,6 +329,19 @@ class SSEEventPublisher(EventPublisher):
         )
         self._message_started = False
         self._block_started = False
+        # Emit an explicit result frame so SSE consumers can detect
+        # turn completion without waiting for the stream to close.
+        self._write(
+            {
+                "type": "result",
+                "subtype": subtype,
+                "session_id": session_id,
+                "duration_ms": duration_ms,
+                "is_error": is_error,
+                "num_turns": num_turns,
+                "result": result,
+            }
+        )
 
     def publish_control_response(
         self, *, request_id: str, subtype: str = "success", **extra: Any

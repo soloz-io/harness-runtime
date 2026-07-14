@@ -12,7 +12,7 @@ Requires:
   redis-server       — available on PATH
 
 Business journey assertions:
-  S1: SSE delivers connected, system, assistant, and result frames in order
+  S1: SSE delivers lifecycle, messages, and result frames in order
   S2: Frames contain the correct session_id
   S3: Two concurrent SSE consumers receive the same events
   S4: SSE stream terminates cleanly after result frame
@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import threading
 import uuid
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -35,7 +36,7 @@ from dotenv import load_dotenv
 from tests.integration_tests.conftest import BASE_URL, sse_server  # noqa: F401
 from tests.integration_tests.helpers import read_sse_frames
 
-env_path = __import__("pathlib").Path(__file__).parent.parent.parent.parent / ".env"
+env_path = Path(__file__).parent.parent.parent.parent / ".env"
 load_dotenv(dotenv_path=env_path)
 
 
@@ -66,27 +67,26 @@ _INPUT_PAYLOAD: dict[str, Any] = {
     "messages": [{"role": "user", "content": "Say hello."}],
 }
 
-
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
 
 
 def test_sse_delivers_frame_types(sse_server: None) -> None:
-    """S1: SSE delivers connected, system, assistant, and result frames in order.
+    """S1: SSE delivers lifecycle, messages, and result frames in order.
 
     Business outcome: SDK receives all frame types needed to render
     the assistant's response progressively.
     """
     session_id = str(uuid.uuid4())
 
-    # POST first to create session (execution runs in background)
     httpx.post(
         f"{BASE_URL}/session/{session_id}/message",
         json={
             "message": "Say hello.",
             "agent_definition": AGENT_SIMPLE,
             "input_payload": dict(_INPUT_PAYLOAD),
+            "workspace_id": "test-workspace",
         },
         timeout=30.0,
     )
@@ -99,37 +99,30 @@ def test_sse_delivers_frame_types(sse_server: None) -> None:
     ) as sse_resp:
         frames = read_sse_frames(sse_resp)
 
-    types = [f["type"] for f in frames]
+    # S1: Verify protocol event ordering
+    methods = [f.get("method") for f in frames if f.get("type") == "event"]
+    assert "lifecycle" in methods, f"Missing lifecycle event. Methods: {methods}"
+    assert "messages" in methods, f"Missing messages event. Methods: {methods}"
 
-    assert "connected" in types, f"Missing connected frame. Types: {types}"
-    assert "system" in types, f"Missing system frame. Types: {types}"
-    assert "assistant" in types, f"Missing assistant frame. Types: {types}"
-    assert "result" in types, f"Missing result frame. Types: {types}"
-
-    assert types.index("connected") < types.index("system"), (
-        f"connected ({types.index('connected')}) should precede "
-        f"system ({types.index('system')}). Types: {types}"
-    )
-    assert types.index("system") < types.index("result"), (
-        f"system ({types.index('system')}) should precede "
-        f"result ({types.index('result')}). Types: {types}"
-    )
-    assert types.index("assistant") < types.index("result"), (
-        f"assistant ({types.index('assistant')}) should precede "
-        f"result ({types.index('result')}). Types: {types}"
+    # First event should be lifecycle (started)
+    first_lifecycle = next(i for i, f in enumerate(frames) if f.get("method") == "lifecycle")
+    first_lifecycle_data = frames[first_lifecycle].get("params", {}).get("data", {})
+    assert first_lifecycle_data.get("event") == "started", (
+        f"First lifecycle event should be 'started', got {first_lifecycle_data.get('event')}"
     )
 
-    # system frame has correct subtype
-    system_frames = [f for f in frames if f.get("type") == "system"]
-    assert len(system_frames) >= 1
-    assert system_frames[0].get("subtype") == "init", (
-        f"system frame subtype is {system_frames[0].get('subtype')}, expected init"
-    )
-
-    # result frame indicates success
+    # Result frame exists and indicates success
     result_frame = next(f for f in frames if f.get("type") == "result")
     assert result_frame.get("subtype") in ("success",), (
-        f"result subtype is {result_frame.get('subtype')}, expected success"
+        f"Result subtype is {result_frame.get('subtype')}, expected success"
+    )
+
+    # Order: lifecycle started < messages < result
+    lifecycle_idx = methods.index("lifecycle")
+    messages_idx = methods.index("messages")
+    result_idx = next(i for i, f in enumerate(frames) if f.get("type") == "result")
+    assert lifecycle_idx < messages_idx < result_idx, (
+        f"Expected lifecycle ({lifecycle_idx}) < messages ({messages_idx}) < result ({result_idx})"
     )
 
 
@@ -147,6 +140,7 @@ def test_sse_events_have_correct_session(sse_server: None) -> None:
             "message": "Say hello.",
             "agent_definition": AGENT_SIMPLE,
             "input_payload": dict(_INPUT_PAYLOAD),
+            "workspace_id": "test-workspace",
         },
         timeout=30.0,
     )
@@ -166,16 +160,16 @@ def test_sse_events_have_correct_session(sse_server: None) -> None:
                 f"{frame['session_id']} != {session_id}"
             )
 
-    # connected frame always carries session_id
-    connected = next(f for f in frames if f.get("type") == "connected")
-    assert connected["session_id"] == session_id
+    # Result frame carries session_id
+    result = next(f for f in frames if f.get("type") == "result")
+    assert result["session_id"] == session_id
 
 
 def test_multi_device_fan_out(sse_server: None) -> None:
-    """S3: Two concurrent SSE consumers receive the same frames.
+    """S3: Two concurrent SSE consumers receive the same events.
 
     Business outcome: Desktop and Mobile clients viewing the same
-    session see identical frame sequences.
+    session see identical event sequences.
     """
     session_id = str(uuid.uuid4())
 
@@ -185,6 +179,7 @@ def test_multi_device_fan_out(sse_server: None) -> None:
             "message": "Say hello.",
             "agent_definition": AGENT_SIMPLE,
             "input_payload": dict(_INPUT_PAYLOAD),
+            "workspace_id": "test-workspace",
         },
         timeout=30.0,
     )
@@ -218,6 +213,8 @@ def test_multi_device_fan_out(sse_server: None) -> None:
     assert len(collected[0]) > 0, "Consumer 0 received no frames"
     assert len(collected[1]) > 0, "Consumer 1 received no frames"
 
+    # Each consumer should have the same number of events (they may differ
+    # in event_id and seq values, but the raw shape should match).
     assert len(collected[0]) == len(collected[1]), (
         f"Frame count mismatch: {len(collected[0])} vs {len(collected[1])}. "
         f"C0 types: {[f.get('type') for f in collected[0]]}. "
@@ -242,6 +239,7 @@ def test_sse_stream_terminates_cleanly(sse_server: None) -> None:
             "message": "Say hello.",
             "agent_definition": AGENT_SIMPLE,
             "input_payload": dict(_INPUT_PAYLOAD),
+            "workspace_id": "test-workspace",
         },
         timeout=30.0,
     )

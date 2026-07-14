@@ -22,6 +22,8 @@ def build_agent_from_definition(
     session_id: str | None = None,
     db_pool: Any = None,
     backend: Any = None,
+    skills: list[str] | None = None,
+    composite_backend: Any = None,
 ) -> Runnable[Any, Any]:
     """
     Build a complete LangGraph graph from an agent definition.
@@ -64,4 +66,6 @@ def build_agent_from_definition(
         session_id=session_id,
         db_pool=db_pool,
         backend=backend,
+        skills=skills,
+        composite_backend=composite_backend,
     )

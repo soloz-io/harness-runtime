@@ -87,9 +87,11 @@ _INPUT_PAYLOAD: dict[str, Any] = {
 
 
 def _post_message(session_id: str, **extra: Any) -> None:
+    payload = dict(extra)
+    payload.setdefault("workspace_id", "test-workspace")
     httpx.post(
         f"{BASE_URL}/session/{session_id}/message",
-        json=extra,
+        json=payload,
         timeout=30.0,
     )
 
