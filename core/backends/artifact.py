@@ -16,6 +16,7 @@ import structlog
 try:
     from deepagents.backends.protocol import (
         FileData,
+        FileInfo,
         GlobResult,
         GrepMatch,
         GrepResult,
@@ -31,13 +32,13 @@ except ImportError:
 try:
     from psycopg_pool import ConnectionPool
 except ImportError:
-    ConnectionPool = None  # type: ignore[assignment,misc]
+    ConnectionPool: Any = None  # type: ignore[assignment]
 
 logger = structlog.get_logger(__name__)
 
 
-def _file_info(path: str, is_dir: bool = False) -> dict[str, Any]:
-    return {"path": path, "is_dir": is_dir, "size": 0, "modified_at": ""}
+def _file_info(path: str, is_dir: bool = False) -> FileInfo:
+    return FileInfo(path=path, is_dir=is_dir, size=0, modified_at="")
 
 
 class ArtifactBackend(StateBackend):
@@ -112,7 +113,7 @@ class ArtifactBackend(StateBackend):
             logger.exception("artifact_backend_db_read_failed", path=path)
             return None
 
-    def _query_db_ls(self, path: str) -> list[dict[str, Any]]:
+    def _query_db_ls(self, path: str) -> list[FileInfo]:
         """Return distinct file entries under *path* from other sessions."""
         db_path = self._normalize_db_path(path)
         prefix1 = db_path if db_path.endswith("/") or not db_path else db_path + "/"
@@ -254,10 +255,10 @@ class ArtifactBackend(StateBackend):
         if path:
             db_paths = [p for p in db_paths if p.startswith(path)]
 
-        db_matches: list[dict[str, Any]] = []
+        db_matches: list[FileInfo] = []
         for fp in db_paths:
             if self._glob_match(fp, pattern):
-                db_matches.append({"path": fp, "is_dir": False, "size": 0, "modified_at": ""})
+                db_matches.append(FileInfo(path=fp, is_dir=False, size=0, modified_at=""))
 
         state_result = super().glob(pattern, path)
         state_matches = state_result.matches or []

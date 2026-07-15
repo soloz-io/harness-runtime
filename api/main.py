@@ -1,3 +1,10 @@
+"""FastAPI application entry point — bootstraps ``RuntimeServices``.
+
+Replaces module-level globals (``_execution_manager``, ``_session_store``,
+``_redis_client``) with a ``RuntimeServices`` container stored on
+``app.state.services``.
+"""
+
 import os
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
@@ -9,6 +16,8 @@ from fastapi import FastAPI
 
 from api.publisher import set_redis_client
 from api.routers import health, sessions
+from core.event_publisher import StdioPublisher
+from core.services import RuntimeServices, init_services
 
 logger = structlog.get_logger(__name__)
 
@@ -23,6 +32,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     r.ping()
     set_redis_client(r)
     logger.info("redis_client_initialized")
+
+    # Bootstrap RuntimeServices — execution_manager is populated below
+    init_services(
+        RuntimeServices(
+            publisher=StdioPublisher(),  # placeholder, replaced per-turn
+            execution_manager=None,  # type: ignore[arg-type]
+            redis_client=r,
+        )
+    )
 
     await sessions.init_execution_manager_async()
     logger.info("harness_runtime_http_started")

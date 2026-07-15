@@ -21,6 +21,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     gcc \
     git \
+    nodejs \
+    npm \
     redis-server \
     && uv pip install --system --no-cache -e "." \
     && apt-get purge -y --auto-remove gcc libpq-dev \

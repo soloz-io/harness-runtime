@@ -8,17 +8,10 @@ and a helper to instantiate the full rubric stack.
 from typing import Any, List, Optional
 
 import structlog
+from deepagents.middleware.rubric import RubricMiddleware
+from langchain.agents.middleware.types import AgentMiddleware
 
 logger = structlog.get_logger(__name__)
-
-try:
-    from deepagents.middleware import AgentMiddleware
-    from deepagents.middleware.rubric import RubricMiddleware
-
-    DEEPAGENTS_AVAILABLE = True
-except ImportError:
-    DEEPAGENTS_AVAILABLE = False
-    AgentMiddleware = object  # dummy for typing
 
 
 class StaticRubricMiddleware(AgentMiddleware):
@@ -30,7 +23,7 @@ class StaticRubricMiddleware(AgentMiddleware):
     def __init__(self, rubric: str):
         self.rubric = rubric
 
-    def before_agent(self, state: dict[str, Any], runtime: Any) -> dict[str, Any] | None:
+    def before_agent(self, state: Any, runtime: Any) -> dict[str, Any] | None:
         """Inject the rubric into the state if missing or different."""
         if "rubric" not in state or state["rubric"] != self.rubric:
             return {"rubric": self.rubric}
@@ -48,7 +41,7 @@ def build_rubric_middlewares(rubric: Optional[str], model: Any) -> List[Any]:
     Returns:
         List of middlewares to append to the stack.
     """
-    if not rubric or not DEEPAGENTS_AVAILABLE:
+    if not rubric:
         return []
 
     logger.info("configuring_rubric_middleware", rubric_length=len(rubric))

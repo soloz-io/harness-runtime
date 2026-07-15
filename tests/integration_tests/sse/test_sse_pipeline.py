@@ -16,6 +16,7 @@ Business journey assertions:
   S2: Frames contain the correct session_id
   S3: Two concurrent SSE consumers receive the same events
   S4: SSE stream terminates cleanly after result frame
+  S5: Sub-agent delegation emits tool, checkpoint, values, and lifecycle frames
 
 Run with:
   export DEEPSEEK_API_KEY="..."
@@ -65,6 +66,51 @@ AGENT_SIMPLE: dict[str, Any] = {
 
 _INPUT_PAYLOAD: dict[str, Any] = {
     "messages": [{"role": "user", "content": "Say hello."}],
+}
+
+# ---------------------------------------------------------------------------
+# Agent definition (orchestrator + specialist sub-agent)
+# ---------------------------------------------------------------------------
+
+AGENT_WITH_SUBAGENT: dict[str, Any] = {
+    "tool_definitions": [],
+    "nodes": [
+        {
+            "id": "orchestrator",
+            "type": "orchestrator",
+            "config": {
+                "name": "subagent-test",
+                "model": dict(_MODEL),
+                "tools": [],
+                "system_prompt": (
+                    "You are a coordinator with one sub-agent: 'researcher'. "
+                    "You MUST use the 'task' tool to delegate every user request "
+                    "to the 'researcher' sub-agent. Never answer the user directly. "
+                    "When you receive the researcher's response, relay it back."
+                ),
+            },
+        },
+        {
+            "id": "researcher",
+            "type": "specialist",
+            "config": {
+                "name": "researcher",
+                "model": dict(_MODEL),
+                "tools": [],
+                "skills": [],
+                "system_prompt": "You are a research assistant. Answer concisely.",
+            },
+        },
+    ],
+}
+
+_INPUT_SUBAGENT_PAYLOAD: dict[str, Any] = {
+    "messages": [
+        {
+            "role": "user",
+            "content": "Research the capital of France and tell me what you find.",
+        }
+    ],
 }
 
 # ---------------------------------------------------------------------------
@@ -260,3 +306,74 @@ def test_sse_stream_terminates_cleanly(sse_server: None) -> None:
 
     # Stream termination: the result frame was delivered and read_sse_frames
     # returned without timeout, confirming the connection closes cleanly.
+
+
+def test_subagent_coverage(sse_server: None) -> None:
+    """S5: Sub-agent delegation emits tool, checkpoint, values, and lifecycle frames.
+
+    Business outcome: SDK receives all event types needed to render
+    sub-agent delegation and execution progressively.
+    """
+    session_id = str(uuid.uuid4())
+
+    httpx.post(
+        f"{BASE_URL}/session/{session_id}/message",
+        json={
+            "message": "Research the capital of France and tell me what you find.",
+            "agent_definition": AGENT_WITH_SUBAGENT,
+            "input_payload": dict(_INPUT_SUBAGENT_PAYLOAD),
+            "workspace_id": "test-workspace",
+        },
+        timeout=30.0,
+    )
+
+    with httpx.stream(
+        "GET",
+        f"{BASE_URL}/event?session_id={session_id}",
+        headers={"Accept": "text/event-stream"},
+        timeout=httpx.Timeout(120.0),
+    ) as sse_resp:
+        frames = read_sse_frames(sse_resp)
+
+    # A1: Root lifecycle started
+    lifecycles = [f for f in frames if f.get("method") == "lifecycle"]
+    assert any(f.get("params", {}).get("data", {}).get("event") == "started" for f in lifecycles), (
+        "No lifecycle-started event found"
+    )
+
+    # A2: Sub-agent completed (proves delegation happened)
+    tool_finished = [
+        f
+        for f in frames
+        if f.get("method") == "tools"
+        and f.get("params", {}).get("data", {}).get("event") == "tool-finished"
+    ]
+    assert len(tool_finished) > 0, (
+        "No tool-finished events found. "
+        "The LLM did not delegate to a sub-agent. "
+        "Expected the orchestrator to call the 'task' tool for the 'researcher' sub-agent."
+    )
+
+    # A3: Checkpoint event exists
+    checkpoints = [f for f in frames if f.get("method") == "checkpoints"]
+    assert len(checkpoints) > 0, "No checkpoint events found"
+
+    # A4: Values event exists
+    values = [f for f in frames if f.get("method") == "values"]
+    assert len(values) > 0, "No values events found"
+
+    # A5: Result is success
+    assert frames[-1]["type"] == "result", (
+        f"Last frame should be result, got {frames[-1].get('type')}"
+    )
+    assert frames[-1].get("subtype") == "success", (
+        f"Result should be success, got {frames[-1].get('subtype')}"
+    )
+
+    # A6: Session ID consistency
+    for frame in frames:
+        if "session_id" in frame:
+            assert frame["session_id"] == session_id, (
+                f"Frame {frame.get('type')} has wrong session_id: "
+                f"{frame['session_id']} != {session_id}"
+            )

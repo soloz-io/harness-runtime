@@ -1,69 +1,31 @@
 """Agent graph executor — runs compiled LangGraph agent and streams events.
 
-Orchestrates the execution loop: invokes the compiled graph, detects
-interrupts, publishes events via the event publisher, and handles
-resume via Command(resume=...).
+Orchestrates the execution loop: invokes the compiled graph, dispatches
+v3 protocol events through a handler chain, detects interrupts, and
+publishes results.
 
 Uses ``stream_events(version="v3")`` (deepagents-native streaming
-protocol) instead of raw ``stream(stream_mode=["values", "messages"])``
-so that specialist subagent content arrives as real-time token deltas
-rather than post-hoc 60-character chunks.
+protocol) so that specialist subagent content arrives as real-time token
+deltas rather than post-hoc 60-character chunks.
 """
 
-import json
+import asyncio
 import time
-import uuid
+import traceback
 from typing import Any, Optional
 
 import psycopg
 import structlog
-from deepagents.middleware.filesystem import FilesystemMiddleware
 from langchain_core.runnables import Runnable, RunnableConfig
 from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+from psycopg import AsyncConnection
 from psycopg_pool import AsyncConnectionPool, ConnectionPool
 
 from core.event_publisher import EventPublisher
-from core.message_writer import write_agent_output_files, write_chat_messages
-
-
-def _get_middleware_tools() -> list[dict[str, Any]]:
-    """Return FilesystemMiddleware tool definitions from deepagents source of truth."""
-    mw = FilesystemMiddleware()
-    return [{"name": t.name, "description": t.description or ""} for t in mw.tools]
-
-
-def _compute_tools(agent_definition: dict[str, Any]) -> list[dict[str, Any]]:
-    """Compute the full tools list for the system frame.
-
-    For star-topology definitions, uses the root-level "tools" field.
-    For custom DAG definitions, unions tools across all nodes' config.tools
-    plus FilesystemMiddleware tools from deepagents.
-    """
-    root_tools = agent_definition.get("tools", [])
-    if root_tools:
-        return root_tools
-
-    middleware_tools = _get_middleware_tools()
-    seen_names: set[str] = {t["name"] for t in middleware_tools}
-    tools: list[dict[str, Any]] = list(middleware_tools)
-
-    nodes = agent_definition.get("nodes", [])
-    tool_defs = agent_definition.get("tool_definitions", [])
-    tool_def_map = {t.get("name"): t for t in tool_defs if isinstance(t, dict)}
-
-    for node in nodes:
-        node_config = node.get("config", {})
-        for name in node_config.get("tools", []):
-            if name not in seen_names:
-                seen_names.add(name)
-                if name in tool_def_map:
-                    tools.append(dict(tool_def_map[name]))
-                else:
-                    tools.append({"name": name, "description": ""})
-
-    return tools
-
+from core.execution_state import ExecutionState
+from core.handlers import create_handler_chain
+from core.types import Event
 
 logger = structlog.get_logger(__name__)
 
@@ -73,7 +35,18 @@ class ExecutionError(Exception):
 
 
 class ExecutionManager:
-    def _init_common(
+    """Executes a compiled LangGraph agent and streams v3 events.
+
+    Uses a **handler chain** (chain-of-responsibility) pattern for
+    event dispatch — each handler has a single responsibility and can
+    be added / removed without modifying this class.
+    """
+
+    # ------------------------------------------------------------------
+    # Construction / lifecycle
+    # ------------------------------------------------------------------
+
+    def __init__(
         self,
         postgres_connection_string: str,
         publisher: EventPublisher,
@@ -84,9 +57,10 @@ class ExecutionManager:
         self._checkpointer_context = None
         self._async_checkpointer = None
         self._async_checkpointer_context = None
-        self._pool = None
-        self._async_pool = None
+        self._pool: Any = None
+        self._async_pool: AsyncConnectionPool[AsyncConnection[dict[str, Any]]] | None = None
         self._tracer = None
+
         try:
             from opentelemetry import trace as _otel_trace
 
@@ -94,19 +68,15 @@ class ExecutionManager:
         except Exception:
             pass
 
-    def __init__(
-        self,
-        postgres_connection_string: str,
-        publisher: EventPublisher,
-    ) -> None:
-        self._init_common(postgres_connection_string, publisher)
         if postgres_connection_string:
             self._pool = ConnectionPool(postgres_connection_string, min_size=1, max_size=5)
             self._setup_checkpointer()
 
+        self._handler_chain = create_handler_chain(pool=self._pool)
+
     def _setup_checkpointer(self) -> None:
         try:
-            conn = psycopg.connect(self.postgres_connection_string, autocommit=True)
+            conn: Any = psycopg.connect(self.postgres_connection_string, autocommit=True)
             self.checkpointer = PostgresSaver(conn=conn)
             self.checkpointer.setup()
             conn.close()
@@ -122,19 +92,37 @@ class ExecutionManager:
         publisher: EventPublisher,
     ) -> "ExecutionManager":
         self = cls.__new__(cls)
-        self._init_common(postgres_connection_string, publisher)
+        self.publisher = publisher
+        self.postgres_connection_string = postgres_connection_string
+        self.checkpointer = None
+        self._checkpointer_context = None
+        self._async_checkpointer = None
+        self._async_checkpointer_context = None
+        self._pool = None
+        self._async_pool = None
+        self._tracer = None
+
+        try:
+            from opentelemetry import trace as _otel_trace
+
+            self._tracer = _otel_trace.get_tracer("harness-runtime", "0.1.13")
+        except Exception:
+            pass
+
         if postgres_connection_string:
             self._pool = ConnectionPool(postgres_connection_string, min_size=1, max_size=5)
             await self._async_setup_checkpointer()
             self.checkpointer = self._async_checkpointer
+
+        self._handler_chain = create_handler_chain(pool=self._pool)
         return self
 
     async def _async_setup_checkpointer(self) -> None:
         try:
-            self._async_pool = AsyncConnectionPool(
+            self._async_pool = AsyncConnectionPool[AsyncConnection[dict[str, Any]]](
                 self.postgres_connection_string, min_size=1, max_size=5
             )
-            aconn = await psycopg.AsyncConnection.connect(
+            aconn: Any = await psycopg.AsyncConnection.connect(
                 self.postgres_connection_string,
                 autocommit=True,
             )
@@ -147,7 +135,7 @@ class ExecutionManager:
             raise
 
     # ------------------------------------------------------------------
-    # Shared v3 event helpers
+    # Shared helpers
     # ------------------------------------------------------------------
 
     def _handle_initial_setup(
@@ -157,7 +145,9 @@ class ExecutionManager:
         model_name: str,
         agent_definition: Optional[dict[str, Any]],
     ) -> None:
-        tools = _compute_tools(agent_definition) if agent_definition else []
+        from core.executor_helpers import compute_tools
+
+        tools = compute_tools(agent_definition) if agent_definition else []
         publisher.publish_system_init(
             session_id=session_id,
             model=model_name,
@@ -176,10 +166,89 @@ class ExecutionManager:
             return Command(resume=resume_payload)
         return input_payload
 
+    async def _build_resume_input(
+        self,
+        input_payload: dict[str, Any],
+        resume_payload: Optional[Any],
+        session_id: str,
+    ) -> Any:
+        """Build stream input for resuming, injecting ToolMessages if needed.
+
+        Loads the checkpoint to find orphaned tool_call_ids and
+        injects matching ToolMessages into the state via
+        ``Command(update=..., resume=...)``.
+        """
+        if resume_payload is None:
+            return input_payload
+
+        from langgraph.types import Command
+
+        decisions: list[dict[str, Any]] = []
+        if isinstance(resume_payload, dict):
+            decisions = resume_payload.get("decisions", [])
+
+        if not decisions:
+            return Command(resume=resume_payload)
+
+        # ---- Load checkpoint to find orphaned tool_call_ids ----
+        tool_call_ids: list[str] = []
+        checkpointer = self._async_checkpointer or self.checkpointer
+        if checkpointer is not None:
+            try:
+                config: RunnableConfig = {"configurable": {"thread_id": session_id}}
+                if hasattr(checkpointer, "aget_tuple"):
+                    cpt = await checkpointer.aget_tuple(config)
+                else:
+                    cpt = checkpointer.get_tuple(config)
+                if cpt is not None:
+                    checkpoint = cpt.checkpoint if hasattr(cpt, "checkpoint") else cpt
+                    if isinstance(checkpoint, dict):
+                        channel_values = checkpoint.get("channel_values", {})
+                        msgs: Any = channel_values.get("messages", [])
+                        if isinstance(msgs, list):
+                            for msg in msgs:
+                                tcs = getattr(msg, "tool_calls", None)
+                                if tcs and isinstance(tcs, list):
+                                    for tc in tcs:
+                                        tid = tc.get("id") or tc.get("tool_call_id") or ""
+                                        if tid:
+                                            tool_call_ids.append(tid)
+            except Exception as e:
+                logger.warning("resume_checkpoint_load_failed", error=str(e))
+
+        if not tool_call_ids:
+            return Command(resume=resume_payload)
+
+        # ---- Build ToolMessages from decisions ----
+        from langchain_core.messages import ToolMessage
+
+        tool_messages: list[Any] = []
+        for i, decision in enumerate(decisions):
+            if i >= len(tool_call_ids):
+                break
+            dt = decision.get("type", "")
+            if dt in ("respond", "reject"):
+                tool_messages.append(
+                    ToolMessage(
+                        tool_call_id=tool_call_ids[i],
+                        content=decision.get("message", ""),
+                        status="success" if dt == "respond" else "error",
+                    )
+                )
+
+        if tool_messages:
+            return Command(update={"messages": tool_messages}, resume=resume_payload)
+
+        return Command(resume=resume_payload)
+
+    # ------------------------------------------------------------------
+    # Event dispatch via handler chain
+    # ------------------------------------------------------------------
+
     def _process_v3_event(
         self,
-        event: dict[str, Any],
-        state: dict[str, Any],
+        raw_event: dict[str, Any],
+        state: ExecutionState,
         publisher: EventPublisher,
         session_id: str,
         model_name: str,
@@ -188,326 +257,72 @@ class ExecutionManager:
     ) -> bool:
         """Process a single ProtocolEvent from stream_events(v3).
 
-        Returns True if execution should continue, False if interrupted/ended.
+        Returns True if execution should continue, False if stopped.
         """
-        method = event["method"]
-        params = event["params"]
-        ns = tuple(params["namespace"])
-        data = params["data"]
+        event = Event.from_raw(raw_event)
+        handled = False
 
-        # --- Lifecycle events -> build namespace mapping ---
-        if method == "lifecycle":
-            self._handle_lifecycle(data, state, session_id, publisher, model_name)
-            return True
+        for handler in self._handler_chain:
+            if handler.can_handle(event):
+                handled = True
+                handler_name = type(handler).__name__
+                try:
+                    result = handler.handle(
+                        event,
+                        state,
+                        publisher,
+                        session_id,
+                        model_name,
+                        start_time,
+                        num_turns,
+                    )
+                except Exception as h_e:
+                    logger.error(
+                        "v3_handler_error",
+                        handler=handler_name,
+                        method=event.method,
+                        ns=event.namespace,
+                        data_type=str(type(event.data)),
+                        data_keys=list(event.data.keys())
+                        if isinstance(event.data, dict)
+                        else "N/A",
+                        raw_event_keys=list(raw_event.keys()),
+                        error=str(h_e),
+                        traceback=traceback.format_exc(),
+                    )
+                    raise
+                logger.info(
+                    "v3_event_dispatch",
+                    method=event.method,
+                    ns=event.namespace,
+                    handler=handler_name,
+                    data_event=event.data.get("event", "")
+                    if isinstance(event.data, dict)
+                    else str(type(event.data)),
+                    data_type=str(type(event.data)),
+                    result=result,
+                )
+                if result is False:
+                    return False
+                return True
 
-        # --- Subagent events -> route content as tool-output-delta ---
-        if ns:
-            if method == "messages":
-                self._handle_subagent_message(data, ns, state, publisher, session_id)
-            return True
-
-        # --- Root (coordinator) events ---
-
-        if method == "messages":
-            return self._handle_root_message(
-                data, state, publisher, session_id, model_name, start_time, num_turns
+        if not handled:
+            logger.info(
+                "v3_event_unhandled",
+                method=event.method,
+                ns=event.namespace,
+                data_event=event.data.get("event", ""),
+                data_keys=list(event.data.keys()),
             )
-
-        if method == "tools":
-            self._handle_root_tools(data, state, publisher, session_id)
-            return True
-
-        if method == "values":
-            self._handle_root_values(data, state, publisher, session_id, start_time, num_turns)
-            # If __interrupt__ was set we stop the run
-            if state.get("_interrupted"):
-                return False
-            return True
-
         return True
 
-    def _handle_lifecycle(
-        self,
-        data: dict[str, Any],
-        state: dict[str, Any],
-        session_id: str,
-        publisher: EventPublisher,
-        model_name: str,
-    ) -> None:
-        """Record namespace->tool_call_id mapping from lifecycle events."""
-        if data.get("event") == "started":
-            ns_list = data.get("namespace")
-            cause = data.get("cause")
-            if (
-                isinstance(ns_list, list)
-                and isinstance(cause, dict)
-                and cause.get("type") == "toolCall"
-            ):
-                tool_call_id = cause.get("tool_call_id")
-                if tool_call_id:
-                    ns_tuple = tuple(ns_list)
-                    state["ns_to_tool_call"][ns_tuple] = tool_call_id
-                    state["subagent_names"][ns_tuple] = data.get("graph_name", "task")
-                    logger.debug(
-                        "subagent_started",
-                        namespace=ns_list,
-                        tool_call_id=tool_call_id,
-                    )
-
-    def _handle_subagent_message(
-        self,
-        data: Any,
-        ns: tuple[str, ...],
-        state: dict[str, Any],
-        publisher: EventPublisher,
-        session_id: str,
-    ) -> None:
-        """Route subagent content-block-delta as tool-output-delta."""
-        tool_call_id = state["ns_to_tool_call"].get(ns)
-        if not tool_call_id:
-            return
-        subagent_name = state["subagent_names"].get(ns, "task")
-        payload, _metadata = data if isinstance(data, tuple) else (data, {})
-        if not isinstance(payload, dict):
-            return
-        event_type = payload.get("event")
-        if event_type == "content-block-delta":
-            delta = payload.get("delta", {})
-            text = delta.get("text", "") if isinstance(delta, dict) else ""
-            if text:
-                publisher.publish_tool_output_delta(
-                    session_id=session_id,
-                    tool_call_id=tool_call_id,
-                    tool_name=subagent_name,
-                    delta=text,
-                )
-
-    def _handle_root_message(
-        self,
-        data: Any,
-        state: dict[str, Any],
-        publisher: EventPublisher,
-        session_id: str,
-        model_name: str,
-        start_time: float,
-        num_turns: int,
-    ) -> bool:
-        """Handle coordinator messages events.
-
-        - content-block-delta (text) -> publish_stream_event_text
-        - content-block-start (tool_call) -> record tool_use block
-        - message-finish -> publish assistant + reset message state
-        """
-        payload, _metadata = data if isinstance(data, tuple) else (data, {})
-        if not isinstance(payload, dict):
-            return True
-        event_type = payload.get("event")
-
-        if event_type == "content-block-delta":
-            delta = payload.get("delta", {})
-            text = delta.get("text", "") if isinstance(delta, dict) else ""
-            if text:
-                state["streamed_text"] += text
-                publisher.publish_stream_event_text(
-                    session_id=session_id,
-                    text=text,
-                )
-
-        elif event_type == "content-block-start":
-            content = payload.get("content", {})
-            if isinstance(content, dict) and content.get("type") == "tool_call":
-                state["current_tool_use_blocks"].append(
-                    {
-                        "type": "tool_use",
-                        "id": content.get("id", f"call_{uuid.uuid4().hex[:12]}"),
-                        "name": content.get("name", "unknown"),
-                        "input": content.get("args", content.get("input", {})),
-                    }
-                )
-
-        elif event_type == "message-finish":
-            streamed_text = state.get("streamed_text", "")
-            blocks = state["current_tool_use_blocks"]
-            if blocks:
-                publisher.publish_assistant(
-                    session_id=session_id,
-                    model=model_name,
-                    content=[{"type": "text", "text": streamed_text or ""}] + blocks,
-                )
-            state["current_tool_use_blocks"] = []
-            publisher.publish_message_finish()
-
-        return True
-
-    def _handle_root_tools(
-        self,
-        data: dict[str, Any],
-        state: dict[str, Any],
-        publisher: EventPublisher,
-        session_id: str,
-    ) -> None:
-        """Handle coordinator tools events (tool-finished for non-task tools)."""
-        event_type = data.get("event")
-        tool_call_id = data.get("tool_call_id")
-        if not tool_call_id:
-            return
-
-        if event_type == "tool-output-delta":
-            delta = data.get("delta", "")
-            if delta:
-                publisher.publish_tool_output_delta(
-                    session_id=session_id,
-                    tool_call_id=tool_call_id,
-                    tool_name=data.get("tool_name") or data.get("name") or "unknown",
-                    delta=delta,
-                )
-
-        elif event_type == "tool-finished":
-            raw_output = data.get("output", "")
-
-            # Extract the state update if the tool returned a LangGraph Command
-            from langgraph.types import Command
-
-            if isinstance(raw_output, Command) and raw_output.update:
-                raw_output = raw_output.update
-
-            # For sub-agent (task) tools, output is the full graph state
-            # dict containing files + messages. Extract the last message's
-            # content for display instead of serializing the entire state.
-            if isinstance(raw_output, dict):
-                msgs = raw_output.get("messages", [])
-                if msgs:
-                    last_msg = msgs[-1]
-                    msg_content = getattr(last_msg, "content", "")
-                    if isinstance(msg_content, list):
-                        content = " ".join(
-                            b.get("text", "") for b in msg_content if isinstance(b, dict)
-                        )
-                    elif not isinstance(msg_content, str):
-                        content = str(msg_content)
-                    else:
-                        content = msg_content
-                else:
-                    content = _serialize_content(raw_output)
-            else:
-                content = _serialize_content(raw_output)
-            publisher.publish_tool_result(
-                session_id=session_id,
-                tool_call_id=tool_call_id,
-                tool_name=data.get("tool_name") or data.get("name") or "unknown",
-                content=content,
-                is_error=bool(data.get("is_error", False)),
-            )
-
-    def _handle_root_values(
-        self,
-        data: dict[str, Any],
-        state: dict[str, Any],
-        publisher: EventPublisher,
-        session_id: str,
-        start_time: float,
-        num_turns: int,
-    ) -> None:
-        """Handle values events.
-
-        - Interrupt detection
-        - structured_response / files extraction
-        - values channel publishing (only when messages change)
-        """
-        if not isinstance(data, dict):
-            return
-
-        # Interrupt detection
-        interrupt_val = data.get("__interrupt__")
-        if interrupt_val is not None:
-            self._handle_interrupt(
-                interrupt_val,
-                state,
-                publisher,
-                session_id,
-                start_time,
-                num_turns,
-            )
-            return
-
-        # Extract structured_response and files
-        if "structured_response" in data:
-            state["last_structured_response"] = data["structured_response"]
-        state_files = data.get("files")
-        if state_files:
-            state["last_files"].update(state_files)
-
-        # Track messages for values channel
-        msgs = data.get("messages", [])
-        prev_count = state.get("_values_messages_count", 0)
-        if len(msgs) > prev_count:
-            state["_values_messages_count"] = len(msgs)
-            serialized_msgs = _serialize_messages_for_values(msgs)
-            if serialized_msgs:
-                # Write projection before SSE (narrows inconsistency window)
-                if self._pool:
-                    logger.debug(
-                        "handle_values_writing_messages",
-                        session_id=session_id,
-                        new_count=len(serialized_msgs),
-                        prev_count=prev_count,
-                    )
-                    write_chat_messages(self._pool, session_id, serialized_msgs, prev_count)
-                    write_agent_output_files(self._pool, session_id, state.get("last_files"))
-                else:
-                    logger.warning(
-                        "handle_values_no_pool_skipping_message_write",
-                        session_id=session_id,
-                    )
-                publisher.publish_checkpoint(session_id=session_id)
-                publisher.publish_values(
-                    session_id=session_id,
-                    messages=serialized_msgs,
-                    files=state.get("last_files"),
-                )
-
-    def _handle_interrupt(
-        self,
-        interrupt_val: Any,
-        state: dict[str, Any],
-        publisher: EventPublisher,
-        session_id: str,
-        start_time: float,
-        num_turns: int,
-    ) -> None:
-        """Handle an interrupt during graph execution."""
-        interrupt_payload = None
-        if isinstance(interrupt_val, (list, tuple)) and len(interrupt_val) > 0:
-            raw = interrupt_val[0]
-            if hasattr(raw, "value"):
-                interrupt_payload = raw.value
-            elif isinstance(raw, dict):
-                interrupt_payload = raw
-            else:
-                interrupt_payload = raw
-        remaining = state.get("streamed_text", "")
-        state["streamed_text"] = ""
-        if remaining:
-            publisher.publish_assistant(
-                session_id=session_id,
-                model="",
-                content=[{"type": "text", "text": remaining}],
-            )
-        duration_ms = int((time.time() - start_time) * 1000)
-        publisher.publish_lifecycle_completed(session_id=session_id)
-        publisher.publish_result(
-            session_id=session_id,
-            subtype="interrupted",
-            duration_ms=duration_ms,
-            num_turns=num_turns,
-            result=remaining or None,
-            interrupt=interrupt_payload,
-        )
-        state["_interrupted"] = True
+    # ------------------------------------------------------------------
+    # Final result publishing
+    # ------------------------------------------------------------------
 
     def _publish_final_result(
         self,
-        state: dict[str, Any],
+        state: ExecutionState,
         publisher: EventPublisher,
         session_id: str,
         start_time: float,
@@ -517,7 +332,7 @@ class ExecutionManager:
     ) -> str:
         """Publish the final result frame."""
         duration_ms = int((time.time() - start_time) * 1000)
-        remaining = state.get("streamed_text", "")
+        remaining = state.streamed_text
         if remaining and not is_error:
             publisher.publish_assistant(
                 session_id=session_id,
@@ -545,23 +360,14 @@ class ExecutionManager:
             duration_ms=duration_ms,
             num_turns=num_turns,
             result=final_text,
-            structured_response=state.get("last_structured_response"),
-            files=state.get("last_files") or None,
+            structured_response=state.last_structured_response,
+            files=state.last_files or None,
         )
         return final_text
 
-    def _init_event_state(self) -> dict[str, Any]:
-        """Create the shared state dict for v3 event processing."""
-        return {
-            "streamed_text": "",
-            "current_tool_use_blocks": [],
-            "ns_to_tool_call": {},
-            "subagent_names": {},
-            "last_structured_response": None,
-            "last_files": {},
-            "_interrupted": False,
-            "_values_messages_count": 0,
-        }
+    # ------------------------------------------------------------------
+    # Async execution
+    # ------------------------------------------------------------------
 
     async def async_execute(
         self,
@@ -583,32 +389,30 @@ class ExecutionManager:
             span.set_attribute("num.turns", num_turns)
 
         start_time = time.time()
-        state = self._init_event_state()
+        state = ExecutionState()
 
         config: RunnableConfig = {"configurable": {"thread_id": session_id}}
         if self._async_checkpointer:
             config["configurable"]["checkpointer"] = self._async_checkpointer
 
         try:
-            self._handle_initial_setup(
-                publisher,
-                session_id,
-                model_name,
-                agent_definition,
-            )
+            self._handle_initial_setup(publisher, session_id, model_name, agent_definition)
 
-            stream_input = self._make_stream_input(input_payload, resume_payload)
+            stream_input = await self._build_resume_input(input_payload, resume_payload, session_id)
 
-            run = await graph.astream_events(
-                stream_input,
-                config,
-                version="v3",
-            )
-            async for event in run:
-                if not isinstance(event, dict):
+            run = await graph.astream_events(stream_input, config, version="v3")
+            async for raw_event in run:
+                if not isinstance(raw_event, dict):
+                    logger.info("v3_raw_event_skipped", type=str(type(raw_event)))
                     continue
+                logger.info(
+                    "v3_raw_event",
+                    method=raw_event.get("method"),
+                    ns=raw_event.get("params", {}).get("namespace"),
+                    data_type=str(type(raw_event.get("params", {}).get("data"))),
+                )
                 ok = self._process_v3_event(
-                    event,
+                    raw_event,
                     state,
                     publisher,
                     session_id,
@@ -636,13 +440,11 @@ class ExecutionManager:
             return result
 
         except Exception as e:
-            logger.error("graph_execution_failed", error=str(e))
-
+            logger.error("graph_execution_failed", error=str(e), traceback=traceback.format_exc())
             if span:
                 span.record_exception(e)
                 span.set_attribute("error", True)
                 span.end()
-
             return self._publish_final_result(
                 state,
                 publisher,
@@ -652,6 +454,10 @@ class ExecutionManager:
                 is_error=True,
                 error_str=str(e),
             )
+
+    # ------------------------------------------------------------------
+    # Sync execution (delegates to async via asyncio.run)
+    # ------------------------------------------------------------------
 
     def execute(
         self,
@@ -670,74 +476,26 @@ class ExecutionManager:
             span.set_attribute("session.id", session_id)
             span.set_attribute("model.name", model_name)
 
-        start_time = time.time()
-        state = self._init_event_state()
-
-        config: RunnableConfig = {"configurable": {"thread_id": session_id}}
-
-        try:
-            self._handle_initial_setup(
-                self.publisher,
-                session_id,
-                model_name,
-                agent_definition,
+        result = asyncio.run(
+            self.async_execute(
+                graph=graph,
+                session_id=session_id,
+                input_payload=input_payload,
+                model_name=model_name,
+                publisher=self.publisher,
+                agent_definition=agent_definition,
+                num_turns=num_turns,
+                resume_payload=resume_payload,
             )
+        )
 
-            stream_input = self._make_stream_input(input_payload, resume_payload)
+        if span:
+            span.end()
+        return result
 
-            run = graph.stream_events(
-                stream_input,
-                config,
-                version="v3",
-            )
-            for event in run:
-                if not isinstance(event, dict):
-                    continue
-                ok = self._process_v3_event(
-                    event,
-                    state,
-                    self.publisher,
-                    session_id,
-                    model_name,
-                    start_time,
-                    num_turns,
-                )
-                if not ok:
-                    if span:
-                        span.end()
-                    return ""
-
-            result = self._publish_final_result(
-                state,
-                self.publisher,
-                session_id,
-                start_time,
-                num_turns,
-            )
-
-            if span:
-                span.set_attribute("duration_ms", int((time.time() - start_time) * 1000))
-                span.end()
-
-            return result
-
-        except Exception as e:
-            logger.error("graph_execution_failed", error=str(e))
-
-            if span:
-                span.record_exception(e)
-                span.set_attribute("error", True)
-                span.end()
-
-            return self._publish_final_result(
-                state,
-                self.publisher,
-                session_id,
-                start_time,
-                num_turns,
-                is_error=True,
-                error_str=str(e),
-            )
+    # ------------------------------------------------------------------
+    # Health / cleanup
+    # ------------------------------------------------------------------
 
     def health_check(self) -> bool:
         try:
@@ -781,44 +539,3 @@ class ExecutionManager:
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         self.close()
-
-
-def _serialize_content(content: Any) -> str:
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        return json.dumps(content, default=str)
-    return str(content)
-
-
-def _serialize_messages_for_values(messages: list) -> list[dict[str, Any]]:
-    serialized: list[dict[str, Any]] = []
-    for msg in messages:
-        msg_id = getattr(msg, "id", None)
-        if not msg_id:
-            msg_id = str(uuid.uuid4())
-        entry: dict[str, Any] = {
-            "id": msg_id,
-            "type": getattr(msg, "type", "unknown"),
-        }
-        content = getattr(msg, "content", "")
-        if isinstance(content, str):
-            entry["content"] = content
-        elif isinstance(content, list):
-            entry["content"] = content
-        else:
-            entry["content"] = str(content)
-        tool_calls = getattr(msg, "tool_calls", [])
-        if tool_calls:
-            entry["tool_calls"] = tool_calls
-        tool_call_id = getattr(msg, "tool_call_id", None)
-        if tool_call_id:
-            entry["tool_call_id"] = tool_call_id
-        name = getattr(msg, "name", None)
-        if name:
-            entry["name"] = name
-        additional_kwargs = getattr(msg, "additional_kwargs", {})
-        if additional_kwargs:
-            entry["additional_kwargs"] = additional_kwargs
-        serialized.append(entry)
-    return serialized

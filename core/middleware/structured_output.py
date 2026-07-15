@@ -16,7 +16,7 @@ from langchain.agents.middleware.types import (
     ModelRequest,
     ModelResponse,
 )
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, BaseMessage
 
 logger = structlog.get_logger(__name__)
 
@@ -30,7 +30,7 @@ _original_convert_message_to_dict = _lc_openai_base._convert_message_to_dict
 
 
 def _patched_convert_message_to_dict(
-    message: Any,
+    message: BaseMessage,
     api: Literal["chat/completions", "responses"] = "chat/completions",
 ) -> dict[str, Any]:
     result = _original_convert_message_to_dict(message, api)
@@ -46,7 +46,7 @@ def _patched_convert_message_to_dict(
     return result
 
 
-_lc_openai_base._convert_message_to_dict = _patched_convert_message_to_dict
+_lc_openai_base._convert_message_to_dict = _patched_convert_message_to_dict  # type: ignore
 logger.debug("monkey_patched_convert_message_to_dict_for_reasoning_content")
 
 

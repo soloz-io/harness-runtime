@@ -38,13 +38,14 @@ class AcrylicTopologyBuilder(TopologyBuilder):
         session_id: str | None = None,
         db_pool: Any = None,
         backend: Any = None,
+        **kwargs: Any,
     ) -> Runnable[Any, Any]:
         """Compile a custom StateGraph from raw_agent_definition nodes & edges."""
         nodes = definition.get("nodes", [])
         edges = definition.get("edges", [])
         state_schema = self._build_state_schema(definition)
 
-        graph = StateGraph(state_schema)  # type: ignore
+        graph: StateGraph[Any, Any, Any, Any] = StateGraph(state_schema)  # type: ignore
 
         # 1. Capture initial messages
         def _capture_initial(state: dict[str, Any]) -> dict[str, Any]:
@@ -153,7 +154,9 @@ class AcrylicTopologyBuilder(TopologyBuilder):
                         increment_targets.add(c["target"])
             elif "condition" in edge:
                 if "retry_count" in edge.get("condition", ""):
-                    increment_targets.add(edge.get("target") or edge.get("to"))
+                    tgt = edge.get("target") or edge.get("to")
+                    if tgt is not None:
+                        increment_targets.add(tgt)
 
         for target in increment_targets:
             budget_node_name = f"__increment_budget_{target}__"
@@ -177,8 +180,14 @@ class AcrylicTopologyBuilder(TopologyBuilder):
         conditional_groups: dict[str, tuple[list[tuple[str, str, str, bool]], str]] = {}
         unconditional_edges: list[tuple[str, str]] = []
 
+        def _source(e: dict[str, Any]) -> str | None:
+            return e.get("source") or e.get("from")  # type: ignore[return-value]
+
+        def _target(e: dict[str, Any]) -> str | None:
+            return e.get("target") or e.get("to")  # type: ignore[return-value]
+
         for edge in edges:
-            source = edge.get("source") or edge.get("from")
+            source = _source(edge)
 
             if "conditions" in edge:
                 entries: list[tuple[str, str, str, bool]] = []
@@ -191,30 +200,39 @@ class AcrylicTopologyBuilder(TopologyBuilder):
                     )
                 default_target = self._prep_target(edge.get("default_target", "__end__"))
 
-                existing = conditional_groups.get(source)
-                if existing is not None:
-                    existing[0].extend(entries)
-                else:
-                    conditional_groups[source] = (entries, default_target)
+                if source is not None:
+                    existing = conditional_groups.get(source)
+                    if existing is not None:
+                        existing[0].extend(entries)
+                    else:
+                        conditional_groups[source] = (entries, default_target)
 
             elif "condition" in edge:
-                target = edge.get("target") or edge.get("to")
+                target = _target(edge)
                 alt_target = self._prep_target(edge.get("alt_target", "__end__"))
                 condition = edge["condition"]
                 inc = "retry_count" in condition
-                entries = [
-                    (condition, self._prep_target(target), f"__increment_budget_{target}__", inc)
-                ]
+                if target is not None:
+                    entries = [
+                        (
+                            condition,
+                            self._prep_target(target),
+                            f"__increment_budget_{target}__",
+                            inc,
+                        )
+                    ]
 
-                existing = conditional_groups.get(source)
-                if existing is not None:
-                    existing[0].extend(entries)
-                else:
-                    conditional_groups[source] = (entries, alt_target)
+                    if source is not None:
+                        existing = conditional_groups.get(source)
+                        if existing is not None:
+                            existing[0].extend(entries)
+                        else:
+                            conditional_groups[source] = (entries, alt_target)
 
             else:
-                target = edge.get("target") or edge.get("to")
-                unconditional_edges.append((source, self._prep_target(target)))
+                target = _target(edge)
+                if source is not None and target is not None:
+                    unconditional_edges.append((source, self._prep_target(target)))
 
         for source, (entries, default_target) in conditional_groups.items():
             router = self._create_combined_edge_router(entries, default_target)

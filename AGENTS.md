@@ -15,6 +15,20 @@ mypy .                       # typecheck (excludes tests/)
 uv run ty core/              # stricter typecheck on core/ only
 ruff check . && uv run ty core/  # full typecheck sequence
 pytest                       # all tests (no -x by default, ~300s timeout)
+
+## Pre-commit hooks
+
+```bash
+pip install pre-commit && pre-commit install   # install hooks (one-time)
+pre-commit run --all-files                     # run all hooks manually
+```
+
+On every `git commit`, three local hooks run sequentially:
+1. `ruff check .` — lint
+2. `ruff format --check .` — format check
+3. `uv run ty check core/` — typecheck
+
+If any fails, the commit is aborted. To skip hooks: `git commit --no-verify`.
 ```
 
 ## Test suites
@@ -52,4 +66,5 @@ Quirks:
 - **No committed lockfile**: `uv.lock` in `.gitignore`
 - **Submodule**: `tests/mock` → `bizmatters/spec-engine`; clone with `--recurse-submodules`
 - **Python version mismatch**: local `.python-version` is `3.12.10`, Docker uses `3.11-slim`, mypy targets `3.11`
-- **No pre-commit hooks, no Makefile/Justfile** — automation via `scripts/` shell scripts only
+- **Pre-commit hooks**: `ruff` lint/format + `ty` typecheck via `pre-commit` framework (see above)
+- **No Makefile/Justfile** — automation via `scripts/` shell scripts only

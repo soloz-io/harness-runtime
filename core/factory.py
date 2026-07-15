@@ -58,14 +58,18 @@ def build_agent_from_definition(
         builder = StarTopologyBuilder()
 
     # 4. Build graph
+    build_kwargs: dict[str, Any] = {
+        "workspace_id": workspace_id,
+        "session_id": session_id,
+        "db_pool": db_pool,
+        "backend": backend,
+    }
+    if not is_acrylic:
+        build_kwargs["skills"] = skills
+        build_kwargs["composite_backend"] = composite_backend
     return builder.build(
         definition,
         available_tools,
         checkpointer,
-        workspace_id=workspace_id,
-        session_id=session_id,
-        db_pool=db_pool,
-        backend=backend,
-        skills=skills,
-        composite_backend=composite_backend,
+        **build_kwargs,
     )

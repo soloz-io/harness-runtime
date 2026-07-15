@@ -152,9 +152,10 @@ class GitBackend:
 
     def cleanup(self) -> None:
         """Remove the cloned temp directory."""
-        if getattr(self, "_tmpdir", None) and self._tmpdir.exists():
-            shutil.rmtree(self._tmpdir, ignore_errors=True)
-            logger.debug("git_backend_cleanup", path=str(self._tmpdir))
+        tmp = getattr(self, "_tmpdir", None)
+        if tmp is not None and tmp.exists():
+            shutil.rmtree(tmp, ignore_errors=True)
+            logger.debug("git_backend_cleanup", path=str(tmp))
 
     def __del__(self) -> None:
         self.cleanup()

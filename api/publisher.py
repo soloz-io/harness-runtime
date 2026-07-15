@@ -53,7 +53,15 @@ class SSEEventPublisher(EventPublisher):
             return
         try:
             r = get_redis_client()
-            r.xadd(self._stream_key, {"data": json.dumps(data, default=str)})
+            result_id = r.xadd(self._stream_key, {"data": json.dumps(data, default=str)})
+            logger.info(
+                "publisher_write",
+                stream_key=self._stream_key,
+                event_type=data.get("type"),
+                method=data.get("method"),
+                seq=data.get("seq", -1),
+                result_id=result_id.decode() if isinstance(result_id, bytes) else str(result_id),
+            )
         except Exception as e:
             logger.error("redis_xadd_failed", error=str(e), stream_key=self._stream_key)
 

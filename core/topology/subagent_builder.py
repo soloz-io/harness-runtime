@@ -23,17 +23,14 @@ from langchain_core.tools import BaseTool
 
 from core.middleware.human_interaction import HumanInteractionMiddleware
 from core.middleware.rubric_middleware import build_rubric_middlewares
+from core.middleware.shell_middleware import ShellMiddleware
 from core.model_factory import ModelFactory
 from core.state_schema_builder import create_state_schema_from_config
 
-try:
-    from core.middleware.github_middleware import GitHubMiddleware
-    from core.middleware.github_middleware import execute_shell as _git_execute_shell
-    from core.middleware.github_middleware import open_pull_request as _git_open_pull_request
-
-    HAS_GITHUB_MIDDLEWARE = True
-except ImportError:
-    HAS_GITHUB_MIDDLEWARE = False
+# ShellMiddleware provides execute_shell for all subagents.  This runs
+# in the sandboxed pod with no additional isolation beyond the pod
+# boundary.  GitHubMiddleware (open_pull_request) is omitted here
+# because PR creation is scoped to specific agent definitions.
 
 logger = structlog.get_logger(__name__)
 
@@ -111,24 +108,6 @@ def build_subagent(
                     available_tools=list(available_tools.keys()),
                 )
 
-        resolved_tools: list[str] = []
-        if missing_from_available and HAS_GITHUB_MIDDLEWARE:
-            _GIT_TOOL_MAP = {
-                "execute_shell": _git_execute_shell,
-                "open_pull_request": _git_open_pull_request,
-            }
-            for name in missing_from_available:
-                tool_fn = _GIT_TOOL_MAP.get(name)
-                if tool_fn is not None:
-                    filtered_tools.append(tool_fn)
-                    resolved_tools.append(name)
-                    logger.info(
-                        "resolved_middleware_tool",
-                        agent_name=agent_name,
-                        tool_name=name,
-                        source="GitHubMiddleware",
-                    )
-
         if not filtered_tools:
             logger.warning(
                 "subagent_has_no_tools", agent_name=agent_name, requested_tools=tool_names
@@ -193,7 +172,7 @@ def _build_subagent_spec(
     TodoListMiddleware, FilesystemMiddleware, SummarizationMiddleware,
     PatchToolCallsMiddleware, and SkillsMiddleware (if skills are set).
     This function only provides middleware that create_deep_agent does not:
-    RubricMiddleware, HumanInteractionMiddleware, GitHubMiddleware.
+    RubricMiddleware, HumanInteractionMiddleware, ShellMiddleware.
     """
 
     state_schema_config = specialist_config.get("state_schema")
@@ -216,12 +195,7 @@ def _build_subagent_spec(
         middleware_stack.extend(rubric_middlewares)
 
     middleware_stack.append(HumanInteractionMiddleware())
-
-    if HAS_GITHUB_MIDDLEWARE:
-        tool_names = specialist_config.get("tools", [])
-        if any(t in tool_names for t in ("execute_shell", "open_pull_request")):
-            middleware_stack.append(GitHubMiddleware())
-            logger.info("added_github_middleware", agent_name=agent_name)
+    middleware_stack.append(ShellMiddleware())
 
     if specialist_config.get("interrupt_on"):
         middleware_stack.append(
@@ -239,7 +213,22 @@ def _build_subagent_spec(
 
     subagent_skills = skills or specialist_config.get("skills")
     if subagent_skills:
-        subagent_spec["skills"] = subagent_skills
+        from deepagents.middleware.permissions import FilesystemPermission
+
+        allowed = [f"{s.rstrip('/')}/**" for s in subagent_skills]
+        subagent_spec["permissions"] = [
+            FilesystemPermission(operations=["read"], paths=allowed, mode="allow"),
+            FilesystemPermission(
+                operations=["read", "write"],
+                paths=["/workspace/.builder/scratch/**"],
+                mode="allow",
+            ),
+            FilesystemPermission(
+                operations=["read"], paths=["/workspace/.builder/skills/*/**"], mode="deny"
+            ),
+        ]
+
+        subagent_spec["skills"] = [f"/workspace/.builder/agent/{agent_name}/"]
 
     if state_schema_class is not None:
         subagent_spec["context_schema"] = state_schema_class

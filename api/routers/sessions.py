@@ -1,3 +1,5 @@
+"""Session management endpoints — uses ``RuntimeServices`` singleton for DI."""
+
 import asyncio
 import os
 import time
@@ -13,6 +15,7 @@ from sse_starlette.sse import EventSourceResponse
 from api.publisher import _SENTINEL, SSEEventPublisher, _stream_key
 from core.executor import ExecutionManager
 from core.integration.git_backend import GitBackendError
+from core.services import get_services
 from core.session import Session
 
 logger = structlog.get_logger(__name__)
@@ -28,10 +31,6 @@ class SessionState:
     publisher: SSEEventPublisher
 
 
-_session_store: dict[str, SessionState] = {}
-_execution_manager: Optional[ExecutionManager] = None
-
-
 def _trim_sentinel(session_id: str) -> None:
     """Remove stale sentinel entries from the Redis stream for a session.
 
@@ -45,7 +44,6 @@ def _trim_sentinel(session_id: str) -> None:
     r = sync_redis.from_url(redis_url)
     key = _stream_key(session_id)
     try:
-        # Scan last 10 entries — sentinel is always at or near the tail.
         entries = r.xrevrange(key, count=10)
         ids_to_delete: list[str | bytes] = []
         for entry_id, fields in entries:
@@ -65,18 +63,33 @@ def _trim_sentinel(session_id: str) -> None:
         r.close()
 
 
+def _get_session_store() -> dict[str, SessionState]:
+    """Return the shared session store from ``RuntimeServices``."""
+    return get_services().session_store  # type: ignore[return-value]
+
+
+def _get_execution_manager() -> ExecutionManager:
+    """Return the shared ``ExecutionManager`` from ``RuntimeServices``."""
+    svc = get_services()
+    assert svc.execution_manager is not None, "ExecutionManager not initialized"
+    return svc.execution_manager
+
+
 async def init_execution_manager_async() -> None:
-    global _execution_manager
-    if _execution_manager is None:
+    """Initialize ``RuntimeServices`` with an async ``ExecutionManager``."""
+    svc = get_services()
+    if svc.execution_manager is None:
+        from api.publisher import SSEEventPublisher
+
         if not _db_url:
             logger.error("DATABASE_URL not set, starting without checkpointer")
-            _execution_manager = await ExecutionManager.create_async(
+            svc.execution_manager = await ExecutionManager.create_async(
                 postgres_connection_string="",
                 publisher=SSEEventPublisher("_init_"),
             )
         else:
             publisher = SSEEventPublisher("_init_")
-            _execution_manager = await ExecutionManager.create_async(
+            svc.execution_manager = await ExecutionManager.create_async(
                 postgres_connection_string=_db_url,
                 publisher=publisher,
             )
@@ -84,17 +97,20 @@ async def init_execution_manager_async() -> None:
 
 
 def init_execution_manager() -> None:
-    global _execution_manager
-    if _execution_manager is None:
+    """Initialize ``RuntimeServices`` with a sync ``ExecutionManager``."""
+    svc = get_services()
+    if svc.execution_manager is None:
+        from api.publisher import SSEEventPublisher
+
         if not _db_url:
             logger.error("DATABASE_URL not set, starting without checkpointer")
-            _execution_manager = ExecutionManager(
+            svc.execution_manager = ExecutionManager(
                 postgres_connection_string="",
                 publisher=SSEEventPublisher("_init_"),
             )
         else:
             publisher = SSEEventPublisher("_init_")
-            _execution_manager = ExecutionManager(
+            svc.execution_manager = ExecutionManager(
                 postgres_connection_string=_db_url,
                 publisher=publisher,
             )
@@ -102,18 +118,20 @@ def init_execution_manager() -> None:
 
 
 async def shutdown_execution_manager_async() -> None:
-    global _execution_manager
-    if _execution_manager is not None:
-        await _execution_manager.aclose()
-        _execution_manager = None
+    """Shut down the ``ExecutionManager`` from ``RuntimeServices``."""
+    svc = get_services()
+    if svc.execution_manager is not None:
+        await svc.execution_manager.aclose()
+        svc.execution_manager = None
         logger.info("execution_manager_shutdown")
 
 
 def shutdown_execution_manager() -> None:
-    global _execution_manager
-    if _execution_manager is not None:
-        _execution_manager.close()
-        _execution_manager = None
+    """Shut down the ``ExecutionManager`` from ``RuntimeServices``."""
+    svc = get_services()
+    if svc.execution_manager is not None:
+        svc.execution_manager.close()
+        svc.execution_manager = None
         logger.info("execution_manager_shutdown")
 
 
@@ -152,29 +170,24 @@ async def handle_message(session_id: str, body: dict[str, Any]) -> dict[str, Any
             detail="workspace_id is required (set in POST body or WORKSPACE_ID env var)",
         )
 
-    if session_id in _session_store:
-        state = _session_store[session_id]
+    session_store = _get_session_store()
+    execution_manager = _get_execution_manager()
+
+    if session_id in session_store:
+        state = session_store[session_id]
         if resume_payload:
             state.session.initialize(resume_payload=resume_payload)
 
-        # The previous turn's publisher wrote a sentinel to the Redis stream
-        # when it closed. We must remove it before the new publisher starts
-        # writing, otherwise the SSE event generator will read the stale
-        # sentinel and terminate the new stream immediately.
         _trim_sentinel(session_id)
-        # Create a fresh publisher for the new turn.
         state.publisher = SSEEventPublisher(session_id)
     else:
-        # If the server restarted, an old sentinel might still be in Redis.
         _trim_sentinel(session_id)
         publisher = SSEEventPublisher(session_id)
-        if not _execution_manager:
-            raise HTTPException(status_code=503, detail="ExecutionManager not initialized")
         try:
             session = Session(
                 agent_definition=agent_definition or {},
                 input_payload=input_payload,
-                execution_manager=_execution_manager,
+                execution_manager=execution_manager,
                 publisher=publisher,
                 session_id=session_id,
                 workspace_id=workspace_id,
@@ -184,7 +197,7 @@ async def handle_message(session_id: str, body: dict[str, Any]) -> dict[str, Any
         if resume_payload:
             session.initialize(resume_payload=resume_payload)
         state = SessionState(session=session, publisher=publisher)
-        _session_store[session_id] = state
+        session_store[session_id] = state
         logger.info("session_initialized", session_id=session_id)
 
     if message or resume_payload:
@@ -198,22 +211,24 @@ async def stream_events(
     session_id: Optional[str] = None,
     last_event_id: str = "0",
 ) -> EventSourceResponse:
+    session_store = _get_session_store()
+
     if session_id:
         deadline = time.time() + 30
-        while session_id not in _session_store:
+        while session_id not in session_store:
             if time.time() > deadline:
                 raise HTTPException(
                     status_code=404, detail=f"Session {session_id} not found within timeout"
                 )
             await asyncio.sleep(0.1)
 
-    if not _session_store:
+    if not session_store:
         raise HTTPException(status_code=404, detail="No active sessions")
 
-    if session_id and session_id not in _session_store:
+    if session_id and session_id not in session_store:
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
 
-    resolved_id = session_id or list(_session_store.keys())[-1]
+    resolved_id = session_id or list(session_store.keys())[-1]
 
     async def event_generator() -> AsyncGenerator[dict[str, Any], None]:
         r = aioredis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379/0"))
@@ -250,19 +265,21 @@ async def stream_events(
                             parsed = json.loads(data_str)
                             method = parsed.get("method", "unknown")
                             seq = parsed.get("seq", -1)
+                            ptype = parsed.get("type", "unknown")
 
-                            summary = data_str[:200]
                             logger.info(
-                                "event_forwarded",
+                                "sse_yield",
                                 session_id=resolved_id,
+                                type=ptype,
                                 method=method,
                                 seq=seq,
-                                data_preview=summary,
+                                keys=list(parsed.keys()),
                             )
-                        except (json.JSONDecodeError, TypeError):
+                        except (json.JSONDecodeError, TypeError) as e:
                             logger.info(
-                                "event_forwarded_raw",
+                                "sse_yield_raw",
                                 session_id=resolved_id,
+                                error=str(e),
                                 data_preview=data_str[:200],
                             )
                         entry_id_str = (

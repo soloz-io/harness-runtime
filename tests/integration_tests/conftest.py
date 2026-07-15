@@ -28,16 +28,19 @@ def sse_server() -> None:
     """
     cli_path = Path(__file__).parent.parent.parent / "cli.py"
 
+    log_file = "/tmp/harness-server-debug.log"
+    log_fh = open(log_file, "w")
     proc = subprocess.Popen(
         [sys.executable, str(cli_path)],
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stderr=log_fh,
         env={
             **__import__("os").environ,
             "PYTHONUNBUFFERED": "1",
             "PORT": str(_HTTP_PORT),
         },
     )
+    log_fh.close()
 
     for _ in range(200):
         if proc.poll() is not None:

@@ -1,10 +1,8 @@
 """
-GitHub Middleware — provides Git and GitHub interaction tools to agents.
+GitHub Middleware — provides GitHub interaction tools to agents.
 
-Exposes `execute_shell` and `open_pull_request` for skill maintenance and git operations.
+Exposes ``open_pull_request`` for opening GitHub pull requests via the REST API.
 """
-
-import subprocess
 
 import httpx
 import structlog
@@ -12,46 +10,6 @@ from langchain.agents.middleware import AgentMiddleware
 from langchain_core.tools import tool
 
 logger = structlog.get_logger(__name__)
-
-
-@tool
-def execute_shell(command: str, timeout: int = 300) -> dict:
-    """Execute a shell command. Use this for git clone, git commit, git push, and search tools like rg.
-
-    Args:
-        command: Shell command to run.
-        timeout: Timeout in seconds. Defaults to 300.
-
-    Returns:
-        On success: {"success": true, "output": str, "exit_code": int, "truncated": false}
-        On failure: {"success": false, "output": str, "exit_code": int, "truncated": false}
-        On timeout: {"success": false, "output": "Command timed out after <N> seconds.", "exit_code": -1, "truncated": true}
-    """
-    logger.info("execute_shell", command=command, timeout=timeout)
-    try:
-        result = subprocess.run(
-            command, shell=True, capture_output=True, text=True, timeout=timeout
-        )
-        return {
-            "success": result.returncode == 0,
-            "output": result.stdout if result.returncode == 0 else result.stderr,
-            "exit_code": result.returncode,
-            "truncated": False,
-        }
-    except subprocess.TimeoutExpired:
-        return {
-            "success": False,
-            "output": f"Command timed out after {timeout} seconds.",
-            "exit_code": -1,
-            "truncated": True,
-        }
-    except Exception as e:
-        return {
-            "success": False,
-            "output": f"Error executing command: {e}",
-            "exit_code": -1,
-            "truncated": False,
-        }
 
 
 @tool
@@ -72,9 +30,9 @@ def open_pull_request(
     in the harness process.
 
     Use this to OPEN a NEW pull request. Push your branch with
-    `git push origin <branch>` BEFORE calling this tool. For everything else —
-    updating an existing PR, marking it ready for review — use `GH_TOKEN=dummy gh pr edit`
-    via `execute_shell`. If a PR already exists for the branch, this returns
+    ``git push origin <branch>`` BEFORE calling this tool. For everything else —
+    updating an existing PR, marking it ready for review — use ``execute_shell``
+    via ``ShellMiddleware``. If a PR already exists for the branch, this returns
     that PR's URL without creating a duplicate.
 
     Args:
@@ -172,10 +130,10 @@ def _find_existing_pr(
 
 
 class GitHubMiddleware(AgentMiddleware):
-    """Provides shell execution and github tools to agents.
+    """Provides GitHub pull request tools to agents.
 
-    Wire this middleware into the agent's middleware stack when `"execute_shell"`
-    or `"open_pull_request"` are requested in the configuration.
+    Wire this middleware into the agent's middleware stack when ``"open_pull_request"``
+    is requested in the configuration.
     """
 
-    tools = [execute_shell, open_pull_request]
+    tools = [open_pull_request]
