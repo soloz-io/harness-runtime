@@ -73,6 +73,9 @@ class SubagentLifecycleHandler(EventHandler):
         subagent_name = state.subagent_names.pop(ns, "task")
         accumulated_output = state.subagent_stream_outputs.pop(tool_call_id, None)
 
+        if accumulated_output is not None:
+            state.subagent_final_outputs[tool_call_id] = accumulated_output
+
         content = accumulated_output or f"subagent_{sub_event}"
         is_error = sub_event == "failed"
 

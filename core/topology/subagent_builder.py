@@ -21,7 +21,6 @@ import structlog
 from langchain.agents.middleware import HumanInTheLoopMiddleware
 from langchain_core.tools import BaseTool
 
-from core.middleware.human_interaction import HumanInteractionMiddleware
 from core.middleware.rubric_middleware import build_rubric_middlewares
 from core.middleware.shell_middleware import ShellMiddleware
 from core.model_factory import ModelFactory
@@ -172,7 +171,7 @@ def _build_subagent_spec(
     TodoListMiddleware, FilesystemMiddleware, SummarizationMiddleware,
     PatchToolCallsMiddleware, and SkillsMiddleware (if skills are set).
     This function only provides middleware that create_deep_agent does not:
-    RubricMiddleware, HumanInteractionMiddleware, ShellMiddleware.
+    RubricMiddleware, ShellMiddleware.
     """
 
     state_schema_config = specialist_config.get("state_schema")
@@ -194,7 +193,6 @@ def _build_subagent_spec(
         rubric_middlewares = build_rubric_middlewares(rubric_config, model_instance)
         middleware_stack.extend(rubric_middlewares)
 
-    middleware_stack.append(HumanInteractionMiddleware())
     middleware_stack.append(ShellMiddleware())
 
     if specialist_config.get("interrupt_on"):

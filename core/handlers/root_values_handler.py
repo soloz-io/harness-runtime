@@ -67,6 +67,14 @@ class RootValuesHandler(EventHandler):
             state.values_messages_count = len(msgs)
             serialized = serialize_messages_for_values(msgs)
             if serialized:
+                for msg in serialized:
+                    if (
+                        msg.get("type") == "tool"
+                        and msg.get("tool_call_id") in state.subagent_final_outputs
+                    ):
+                        msg["subagent_streaming_text"] = state.subagent_final_outputs[
+                            msg["tool_call_id"]
+                        ]
                 if self._pool is not None:
                     logger.debug(
                         "handle_values_writing_messages",
