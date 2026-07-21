@@ -52,11 +52,17 @@ def write_chat_messages(
     session_id: str,
     messages: list[dict[str, Any]],
     offset: int,
+    source: str = "runtime",
 ) -> None:
     """Insert new messages into chat_messages.
 
     Called exactly once per batch of new messages produced by the running
     graph.  Duplicates are silently ignored via ON CONFLICT DO NOTHING.
+
+    The ``source`` parameter distinguishes the origin of messages:
+    - ``'runtime'`` (default) — orchestrator messages from root namespace
+    - ``'subagent'`` — sub-agent internal reasoning from sub-agent namespace
+    - ``'stream'`` — SDK-initiated inserts
 
     Failures are logged but never raised — the checkpoint is the authoritative
     execution state; this is a read-model projection.
@@ -74,7 +80,7 @@ def write_chat_messages(
                         """
                         INSERT INTO chat_messages
                             (id, session_id, role, content, message, sequence, source)
-                        VALUES (%s, %s, %s, %s::jsonb, %s::jsonb, %s, 'runtime')
+                        VALUES (%s, %s, %s, %s::jsonb, %s::jsonb, %s, %s)
                         ON CONFLICT (session_id, (message->>'id')) DO NOTHING
                         """,
                         (
@@ -84,6 +90,7 @@ def write_chat_messages(
                             Jsonb(msg.get("content", "")),
                             Jsonb(msg),
                             offset + i,
+                            source,
                         ),
                     )
                     if cur.rowcount == 0:

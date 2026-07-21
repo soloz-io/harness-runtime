@@ -27,3 +27,4 @@ class ExecutionState:
     values_messages_count: int = 0
     subagent_stream_outputs: dict[str, str] = field(default_factory=dict)
     subagent_final_outputs: dict[str, str] = field(default_factory=dict)
+    subagent_values_messages_count: dict[Namespace, int] = field(default_factory=dict)

@@ -64,7 +64,7 @@ def create_handler_chain(
     return [
         LifecycleHandler(),
         SubagentMessageHandler(),
-        SubagentValuesHandler(),
+        SubagentValuesHandler(pool=pool),
         SubagentLifecycleHandler(),
         SubagentToolsHandler(),
         RootMessageHandler(),
