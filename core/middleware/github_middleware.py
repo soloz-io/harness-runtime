@@ -31,7 +31,7 @@ def open_pull_request(
 
     Use this to OPEN a NEW pull request. Push your branch with
     ``git push origin <branch>`` BEFORE calling this tool. For everything else —
-    updating an existing PR, marking it ready for review — use ``execute_shell``
+    updating an existing PR, marking it ready for review — use ``compile_schema``
     via ``ShellMiddleware``. If a PR already exists for the branch, this returns
     that PR's URL without creating a duplicate.
 

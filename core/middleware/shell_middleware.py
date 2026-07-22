@@ -1,11 +1,9 @@
 """
-Shell Middleware — provides shell execution capability to agents.
+Compile Schema Middleware — provides DSL compilation capability to agents.
 
-Agents use ``execute_shell`` to run CLI commands (git, node, npm, python, etc.)
-in the sandboxed pod.  Builtin filesystem commands (cat, ls, grep, cp, rm, ...)
-are blocked with a warning — agents must use the dedicated deepagents filesystem
-tools (read_file, write_file, ls, glob, grep) which respect virtual paths and
-permission rules.
+Agents use ``compile_schema`` to run the wpt-engine CLI against their DSL
+documents.  The tool hardcodes the command to ``node /workspace/.builder/bin/cli.cjs``
+so agents only supply the file path to the ``.md`` file.
 """
 
 import subprocess
@@ -16,109 +14,17 @@ from langchain_core.tools import tool
 
 logger = structlog.get_logger(__name__)
 
-_FS_COMMANDS = {
-    "cat",
-    "head",
-    "tail",
-    "less",
-    "more",
-    "xxd",
-    "od",
-    "hexdump",
-    "bat",
-    "ls",
-    "find",
-    "locate",
-    "tree",
-    "dir",
-    "exa",
-    "eza",
-    "grep",
-    "rg",
-    "ripgrep",
-    "ag",
-    "ack",
-    "sed",
-    "awk",
-    "cp",
-    "mv",
-    "rm",
-    "chmod",
-    "chown",
-    "ln",
-    "touch",
-    "mkdir",
-    "rmdir",
-    "stat",
-    "file",
-    "wc",
-    "du",
-    "df",
-    "realpath",
-    "readlink",
-    "tee",
-}
-
-_FS_TOOL_MAP = {
-    "cat": "read_file",
-    "head": "read_file",
-    "tail": "read_file",
-    "less": "read_file",
-    "more": "read_file",
-    "xxd": "read_file",
-    "od": "read_file",
-    "hexdump": "read_file",
-    "bat": "read_file",
-    "ls": "ls",
-    "find": "ls",
-    "locate": "ls",
-    "tree": "ls",
-    "dir": "ls",
-    "exa": "ls",
-    "eza": "ls",
-    "grep": "grep",
-    "rg": "grep",
-    "ripgrep": "grep",
-    "ag": "grep",
-    "ack": "grep",
-    "cp": "write_file",
-    "mv": "write_file",
-    "rm": "write_file",
-    "chmod": "write_file",
-    "chown": "write_file",
-    "ln": "write_file",
-    "touch": "write_file",
-    "mkdir": "write_file",
-    "rmdir": "write_file",
-    "tee": "write_file",
-    "sed": "write_file",
-    "awk": "grep",
-    "stat": "ls",
-    "file": "read_file",
-    "wc": "read_file",
-    "du": "ls",
-    "df": "ls",
-    "realpath": "read_file",
-    "readlink": "read_file",
-}
-
-
-def _first_token(command: str) -> str:
-    """Extract the first whitespace-delimited token, stripping leading chars."""
-    return command.strip().split()[0] if command.strip() else ""
-
 
 @tool
-def execute_shell(command: str, workdir: str | None = None, timeout: int = 300) -> dict:
-    """Execute a shell command in the sandboxed pod.
+def compile_schema(file_path: str, timeout: int = 300) -> dict:
+    """Compile and validate a DSL document against the workflow or DAG schema.
 
-    Use for git operations, running node/python scripts, package management,
-    and other CLI tools.  For reading/writing/searching files, use the
-    dedicated filesystem tools (read_file, write_file, ls, glob, grep) instead.
+    Runs the wpt-engine CLI against the given Markdown file.  The CLI
+    auto-detects the document type (workflow vs DAG) from the YAML
+    frontmatter ``type`` field.
 
     Args:
-        command: Shell command to run.
-        workdir: Working directory for the command. Defaults to the process cwd.
+        file_path: Absolute path to the ``.md`` DSL file.
         timeout: Timeout in seconds. Defaults to 300.
 
     Returns:
@@ -126,21 +32,9 @@ def execute_shell(command: str, workdir: str | None = None, timeout: int = 300) 
         On failure: {"success": false, "output": str, "exit_code": int, "truncated": false}
         On timeout: {"success": false, "output": "Command timed out after <N> seconds.", "exit_code": -1, "truncated": true}
     """
-    cmd = _first_token(command)
-    if cmd in _FS_COMMANDS:
-        tool_name = _FS_TOOL_MAP.get(cmd, "filesystem")
-        return {
-            "success": False,
-            "output": (
-                f"Warning: `{cmd}` is a filesystem operation. "
-                f"Use the built-in deepagents tool (`{tool_name}`) instead, "
-                f"which correctly handles virtual paths and permission rules."
-            ),
-            "exit_code": -1,
-            "truncated": False,
-        }
+    command = f"node /workspace/.builder/bin/cli.cjs {file_path}"
 
-    logger.info("execute_shell", command=command, workdir=workdir, timeout=timeout)
+    logger.info("compile_schema", file_path=file_path, timeout=timeout)
     try:
         result = subprocess.run(
             command,
@@ -148,7 +42,6 @@ def execute_shell(command: str, workdir: str | None = None, timeout: int = 300) 
             capture_output=True,
             text=True,
             timeout=timeout,
-            cwd=workdir,
         )
         return {
             "success": result.returncode == 0,
@@ -173,10 +66,10 @@ def execute_shell(command: str, workdir: str | None = None, timeout: int = 300) 
 
 
 class ShellMiddleware(AgentMiddleware):
-    """Provides shell execution capability to agents.
+    """Provides shell command execution capability to agents.
 
-    Wire this middleware for every agent that needs CLI access — subagents
-    (Workflow Architect, DAG Architect) use it to run validation commands.
+    Wire this middleware for agents that need to run CLI commands.
+    Currently exposes ``compile_schema`` for DSL compilation.
     """
 
-    tools = [execute_shell]
+    tools = [compile_schema]

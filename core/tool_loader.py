@@ -21,7 +21,7 @@ BUILTIN_TOOLS = {
     "read_file",
     "write_file",
     "ask_user",
-    "execute_shell",
+    "compile_schema",
 }
 
 

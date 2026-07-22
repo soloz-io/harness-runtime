@@ -22,7 +22,7 @@ class SkillsManager:
     On initialization it clones the skills repository, creates per-skill
     temporary directories, wires FilesystemBackend routes, builds a
     CompositeBackend, and creates stable filesystem symlinks for
-    ``execute_shell`` access.  ``cleanup()`` tears everything down.
+    ``compile_schema`` access.  ``cleanup()`` tears everything down.
     """
 
     def __init__(
@@ -61,7 +61,7 @@ class SkillsManager:
         self._router = AgentSkillRouter(self._agent_definition, self._tmp_dirs)
         skill_routes.update(self._router.build_routes())
 
-        # Delete the full clone to prevent execute_shell from finding it
+        # Delete the full clone to prevent shell access from finding it
         shutil.rmtree(str(self._git_backend.repo_path), ignore_errors=True)
         logger.info("skills_clone_deleted", path=str(self._git_backend.repo_path))
 

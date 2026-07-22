@@ -26,7 +26,7 @@ from core.middleware.shell_middleware import ShellMiddleware
 from core.model_factory import ModelFactory
 from core.state_schema_builder import create_state_schema_from_config
 
-# ShellMiddleware provides execute_shell for all subagents.  This runs
+# ShellMiddleware provides compile_schema for all subagents.  This runs
 # in the sandboxed pod with no additional isolation beyond the pod
 # boundary.  GitHubMiddleware (open_pull_request) is omitted here
 # because PR creation is scoped to specific agent definitions.
