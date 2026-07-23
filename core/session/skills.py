@@ -1,5 +1,6 @@
 import os
 import shutil
+import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -54,6 +55,7 @@ class SkillsManager:
         self._create_skill_symlinks()
         self._create_scratch(skill_routes)
         self._copy_cli_to_stable_path(cli_src)
+        self._copy_cli_manifest_to_stable_path()
 
         # Build per-agent skill wrapper routes
         from core.skill_router import AgentSkillRouter
@@ -166,6 +168,33 @@ class SkillsManager:
             shutil.copy2(str(cli_src), str(stable_cli))
             logger.info("cli_copied_to_stable_path", path=str(stable_cli))
 
+    def _copy_cli_manifest_to_stable_path(self) -> None:
+        """Generate action manifest by invoking the wpt-engine CLI with ``--manifest``."""
+        cli_path = Path("/workspace/.builder/bin/cli.cjs")
+        if not cli_path.exists():
+            logger.warning("cli_not_found_for_manifest", path=str(cli_path))
+            return
+        stable_dir = Path("/workspace/.builder/bin")
+        stable_dir.mkdir(parents=True, exist_ok=True)
+        stable_manifest = stable_dir / "action-manifest.json"
+        if stable_manifest.exists():
+            return
+        try:
+            result = subprocess.run(
+                ["node", str(cli_path), "--manifest"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if result.returncode != 0:
+                logger.error("manifest_generation_failed", stderr=result.stderr[:500])
+                return
+            with open(str(stable_manifest), "w") as f:
+                f.write(result.stdout)
+            logger.info("manifest_generated", path=str(stable_manifest), size=len(result.stdout))
+        except Exception as exc:
+            logger.error("manifest_generation_error", error=str(exc))
+
     def _build_composite_backend(self, routes: dict[str, Any]) -> Optional[Any]:
         """Wrap an ArtifactBackend + per-skill FilesystemBackends into a CompositeBackend."""
         if not routes:
@@ -219,3 +248,9 @@ class SkillsManager:
         if stable_cli.exists():
             stable_cli.unlink()
             logger.info("stable_cli_removed", path=str(stable_cli))
+
+        # Remove stable manifest copy
+        stable_manifest = Path("/workspace/.builder/bin/action-manifest.json")
+        if stable_manifest.exists():
+            stable_manifest.unlink()
+            logger.info("stable_manifest_removed", path=str(stable_manifest))
