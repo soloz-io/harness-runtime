@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 env_path = Path(__file__).parent.parent.parent.parent / ".env"
 load_dotenv(dotenv_path=env_path)
 
-GIT_REF = "packages/master-chief-agent/src/skills"
+GIT_REF = "packages/builders/src/skills"
 
 # Skills expected by the test fixture definition.json
 EXPECTED_SKILLS: set[str] = {

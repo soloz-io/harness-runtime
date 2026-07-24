@@ -67,8 +67,8 @@ echo "OWNER=$AGENTREGISTRY_GIT_OWNER REPO=$AGENTREGISTRY_GIT_REPO"
 # Test git access
 git ls-remote https://github.com/$AGENTREGISTRY_GIT_OWNER/$AGENTREGISTRY_GIT_REPO.git
 
-# Check if the expected subfolder exists (default: packages/master-chief-agent/src/skills)
-git ls-tree -d HEAD packages/master-chief-agent/src/skills
+# Check if the expected subfolder exists (default: packages/builders/src/skills)
+git ls-tree -d HEAD packages/builders/src/skills
 ```
 
 ## Automated Setup Script

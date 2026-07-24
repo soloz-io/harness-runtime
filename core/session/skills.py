@@ -82,7 +82,7 @@ class SkillsManager:
     def _clone_repo(self) -> Any:
         from core.integration.git_backend import GitBackend
 
-        return GitBackend("packages/master-chief-agent/src/skills")
+        return GitBackend("packages/builders/src/skills")
 
     def _isolate_skills(self, repo_path: Path) -> dict[str, Path]:
         """Copy each skill directory into an isolated temp directory."""
