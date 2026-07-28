@@ -46,7 +46,7 @@ class SkillsManager:
             return SkillsContext()
 
         self._git_backend = self._clone_repo()
-        cli_src = self._git_backend.repo_path / "packages" / "wpt-engine" / "bin" / "cli.cjs"
+        cli_src = self._git_backend.repo_path / "packages" / "workflow-engine" / "bin" / "cli.cjs"
 
         self._tmp_dirs = self._isolate_skills(self._git_backend.path)
         self._copy_cli_to_skill_dirs(cli_src)
@@ -98,7 +98,7 @@ class SkillsManager:
         return tmp_dirs
 
     def _copy_cli_to_skill_dirs(self, cli_src: Path) -> None:
-        """Copy the wpt-engine CLI into each skill's engine directory."""
+        """Copy the workflow-engine CLI into each skill's engine directory."""
         if not cli_src.exists():
             return
         for skill_name, tmp_dir in self._tmp_dirs.items():
@@ -157,7 +157,7 @@ class SkillsManager:
             )
 
     def _copy_cli_to_stable_path(self, cli_src: Path) -> None:
-        """Copy the wpt-engine CLI to ``/workspace/.builder/bin/cli.cjs``."""
+        """Copy the workflow-engine CLI to ``/workspace/.builder/bin/cli.cjs``."""
         if not cli_src.exists():
             logger.warning("cli_source_not_found", path=str(cli_src))
             return
@@ -169,7 +169,7 @@ class SkillsManager:
             logger.info("cli_copied_to_stable_path", path=str(stable_cli))
 
     def _copy_cli_manifest_to_stable_path(self) -> None:
-        """Generate action manifest by invoking the wpt-engine CLI with ``--manifest``."""
+        """Generate action manifest by invoking the workflow-engine CLI with ``--manifest``."""
         cli_path = Path("/workspace/.builder/bin/cli.cjs")
         if not cli_path.exists():
             logger.warning("cli_not_found_for_manifest", path=str(cli_path))

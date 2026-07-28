@@ -116,7 +116,7 @@ This ADR defines architectural constraints and does not own platform resources. 
 
 This ADR does not amend any existing ADR. It extends the star topology builder defined in ADR-011 and the middleware stack composition defined in ADR-012. The `GitBackend` is a new utility class consumed at graph-build time by `star_topology.py`.
 
-The `agent-dag-schema.json` (`packages/wpt-engine/schemas/agent-dag-schema.json`) must be updated to add `gitRef` as a field on `nodes[].config.properties`.
+The `agent-dag-schema.json` (`packages/workflow-engine/schemas/agent-dag-schema.json`) must be updated to add `gitRef` as a field on `nodes[].config.properties`.
 
 ## References
 

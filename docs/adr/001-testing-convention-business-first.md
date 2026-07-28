@@ -7,7 +7,7 @@
 
 ## Context
 
-No testing convention has been codified as an ADR. As the Waypoint platform grows across multiple packages (waypoint-sdk, bff, frontend, wpt-engine, harness-runtime), inconsistent testing approaches create gaps in coverage and erode confidence in production behavior.
+No testing convention has been codified as an ADR. As the Waypoint platform grows across multiple packages (waypoint-sdk, bff, frontend, workflow-engine, harness-runtime), inconsistent testing approaches create gaps in coverage and erode confidence in production behavior.
 
 Without a binding convention, tests drift toward one of two failure modes:
 - **Unit tests** that validate implementation details rather than business outcomes — they pass after refactoring but don't guarantee the system works.

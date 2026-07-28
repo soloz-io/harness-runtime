@@ -2,7 +2,7 @@
 Compile Schema Middleware — provides DSL compilation and action manifest
 capabilities to agents.
 
-Agents use ``compile_schema`` to run the wpt-engine CLI against their DSL
+Agents use ``compile_schema`` to run the workflow-engine CLI against their DSL
 documents.  The tool hardcodes the command to ``node /workspace/.builder/bin/cli.cjs``
 so agents only supply the file path to the ``.md`` file.
 
@@ -29,7 +29,7 @@ MANIFEST_DEFAULT_PATH = "/workspace/.builder/bin/action-manifest.json"
 def compile_schema(file_path: str, timeout: int = 300) -> dict:
     """Compile and validate a DSL document against the workflow or DAG schema.
 
-    Runs the wpt-engine CLI against the given Markdown file.  The CLI
+    Runs the workflow-engine CLI against the given Markdown file.  The CLI
     auto-detects the document type (workflow vs DAG) from the YAML
     frontmatter ``type`` field.
 
