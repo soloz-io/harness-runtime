@@ -10,6 +10,7 @@ _MODEL_PREFIX_MAP = {
     "gpt": "openai",
     "o1": "openai",
     "claude": "anthropic",
+    "poolside": "openai",
 }
 
 
@@ -17,7 +18,7 @@ def _detect_provider(model_name: str) -> str:
     """Detect the LLM provider from the model name prefix."""
     if not model_name:
         raise ValueError("model_name is required to detect provider")
-    prefix = model_name.split("-")[0].lower()
+    prefix = (model_name.split("/")[0] if "/" in model_name else model_name.split("-")[0]).lower()
     result = _MODEL_PREFIX_MAP.get(prefix)
     if not result:
         raise ValueError(
