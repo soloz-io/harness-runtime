@@ -29,12 +29,13 @@ _db_url: str = os.environ.get("DATABASE_URL", "")
 class SessionState:
     session: Session
     publisher: SSEEventPublisher
+    task: Optional[asyncio.Task[Any]] = None
 
 
 def _trim_sentinel(session_id: str) -> None:
     """Remove stale sentinel entries from the Redis stream for a session.
 
-    When a turn completes, the publisher writes a sentinel (``\\x00end\\x00``)
+    When a turn completes, the publisher writes a sentinel (``\x00end\x00``)
     to the stream.  Before starting a new turn we must remove it so the SSE
     event generator doesn't hit the old sentinel and terminate prematurely.
     """
@@ -135,11 +136,21 @@ def shutdown_execution_manager() -> None:
         logger.info("execution_manager_shutdown")
 
 
-async def _run_turn_async(
-    session: Session, publisher: SSEEventPublisher, user_content: str
-) -> None:
+async def _run_turn_async(state: SessionState, user_content: str) -> None:
+    session = state.session
+    publisher = state.publisher
+    state.task = asyncio.current_task()
     try:
         await session.async_run_turn(user_content=user_content, publisher=publisher)
+    except asyncio.CancelledError:
+        logger.info("session_run_turn_cancelled", session_id=session.session_id)
+        publisher.publish_result(
+            session_id=session.session_id,
+            subtype="cancelled",
+            is_error=True,
+            result="Turn cancelled by user",
+        )
+        raise
     except Exception as e:
         logger.error("session_run_turn_failed", error=str(e), traceback=traceback.format_exc())
         publisher.publish_result(
@@ -149,6 +160,7 @@ async def _run_turn_async(
             result=str(e),
         )
     finally:
+        state.task = None
         publisher.close()
 
 
@@ -201,9 +213,21 @@ async def handle_message(session_id: str, body: dict[str, Any]) -> dict[str, Any
         logger.info("session_initialized", session_id=session_id)
 
     if message or resume_payload:
-        asyncio.create_task(_run_turn_async(state.session, state.publisher, message))
+        state.task = asyncio.create_task(_run_turn_async(state, message))
 
     return {"success": True}
+
+
+@router.post("/session/{session_id}/cancel")
+async def cancel_session(session_id: str) -> dict[str, Any]:
+    session_store = _get_session_store()
+    if session_id in session_store:
+        state = session_store[session_id]
+        if state.task and not state.task.done():
+            state.task.cancel()
+            logger.info("session_turn_cancelled", session_id=session_id)
+            return {"success": True, "cancelled": True}
+    return {"success": True, "cancelled": False}
 
 
 @router.get("/event")

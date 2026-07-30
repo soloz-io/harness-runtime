@@ -453,6 +453,21 @@ class ExecutionManager:
 
             return result
 
+        except asyncio.CancelledError:
+            logger.info("graph_execution_cancelled", session_id=session_id)
+            if span:
+                span.set_attribute("cancelled", True)
+                span.end()
+            publisher.publish_lifecycle_failed(
+                session_id=session_id, error="Execution cancelled by user"
+            )
+            publisher.publish_result(
+                session_id=session_id,
+                subtype="cancelled",
+                is_error=True,
+                result="Execution cancelled by user",
+            )
+            raise
         except Exception as e:
             logger.error("graph_execution_failed", error=str(e), traceback=traceback.format_exc())
             if span:
