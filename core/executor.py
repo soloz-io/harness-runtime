@@ -10,6 +10,7 @@ deltas rather than post-hoc 60-character chunks.
 """
 
 import asyncio
+import os
 import time
 import traceback
 from typing import Any, Optional
@@ -28,6 +29,16 @@ from core.handlers import create_handler_chain
 from core.types import Event
 
 logger = structlog.get_logger(__name__)
+
+# Maximum number of LangGraph graph steps (tool invocations + LLM calls)
+# allowed per execution.  The deepagents library sets recursion_limit=9999
+# which is effectively unlimited and allows degenerate model behaviour
+# (e.g. a subagent looping on the same tool call) to run forever.
+# 150 is generous enough for deep orchestrator + subagent workflows while
+# still guarding against infinite loops.  When hit, LangGraph raises
+# GraphRecursionError which the existing exception handler surfaces to the
+# client as a clean error.
+RECURSION_LIMIT = int(os.environ.get("HARNESS_RECURSION_LIMIT", "150"))
 
 
 class ExecutionError(Exception):
@@ -391,7 +402,10 @@ class ExecutionManager:
         start_time = time.time()
         state = ExecutionState()
 
-        config: RunnableConfig = {"configurable": {"thread_id": session_id}}
+        config: RunnableConfig = {
+            "configurable": {"thread_id": session_id},
+            "recursion_limit": RECURSION_LIMIT,
+        }
         if self._async_checkpointer:
             config["configurable"]["checkpointer"] = self._async_checkpointer
 
