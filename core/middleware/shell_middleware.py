@@ -29,11 +29,11 @@ MANIFEST_DEFAULT_PATH = "/workspace/.builder/bin/action-manifest.json"
 
 @tool
 def compile_schema(file_path: str, timeout: int = 300) -> dict:
-    """Compile and validate a DSL document against the workflow or DAG schema.
+    """Compile and validate a DSL document against the business, product, workflow, or DAG schema.
 
     Runs the workflow-engine CLI against the given Markdown file.  The CLI
-    auto-detects the document type (workflow vs DAG) from the YAML
-    frontmatter ``type`` field.
+    auto-detects the document type (business, product, workflow, or DAG) from
+    the YAML frontmatter ``type`` field.
 
     Args:
         file_path: Absolute path to the ``.md`` DSL file.

@@ -100,6 +100,11 @@ class SSEEventPublisher(EventPublisher):
     def publish_lifecycle_failed(self, *, session_id: str, error: str) -> None:
         self._write(self._protocol_event("lifecycle", {"event": "failed", "error": error}))
 
+    def publish_lifecycle_cancelled(
+        self, *, session_id: str, reason: str = "Execution cancelled by user"
+    ) -> None:
+        self._write(self._protocol_event("lifecycle", {"event": "cancelled", "reason": reason}))
+
     def publish_checkpoint(self, *, session_id: str) -> None:
         self._checkpoint_step += 1
         self._write(

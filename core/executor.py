@@ -458,8 +458,8 @@ class ExecutionManager:
             if span:
                 span.set_attribute("cancelled", True)
                 span.end()
-            publisher.publish_lifecycle_failed(
-                session_id=session_id, error="Execution cancelled by user"
+            publisher.publish_lifecycle_cancelled(
+                session_id=session_id, reason="Execution cancelled by user"
             )
             publisher.publish_result(
                 session_id=session_id,

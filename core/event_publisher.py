@@ -32,6 +32,11 @@ class EventPublisher(ABC):
     def publish_lifecycle_failed(self, *, session_id: str, error: str) -> None: ...
 
     @abstractmethod
+    def publish_lifecycle_cancelled(
+        self, *, session_id: str, reason: str = "Execution cancelled by user"
+    ) -> None: ...
+
+    @abstractmethod
     def publish_checkpoint(self, *, session_id: str) -> None: ...
 
     @abstractmethod
@@ -132,6 +137,11 @@ class StdioPublisher(EventPublisher):
         pass
 
     def publish_lifecycle_failed(self, *, session_id: str, error: str) -> None:
+        pass
+
+    def publish_lifecycle_cancelled(
+        self, *, session_id: str, reason: str = "Execution cancelled by user"
+    ) -> None:
         pass
 
     def publish_checkpoint(self, *, session_id: str) -> None:

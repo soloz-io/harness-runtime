@@ -21,6 +21,11 @@ class LifecyclePublisher(ABC):
     @abstractmethod
     def publish_lifecycle_failed(self, *, session_id: str, error: str) -> None: ...
 
+    @abstractmethod
+    def publish_lifecycle_cancelled(
+        self, *, session_id: str, reason: str = "Execution cancelled by user"
+    ) -> None: ...
+
 
 class MessageStreamPublisher(ABC):
     """Publish message-level streaming events (text deltas, assistant frames)."""
