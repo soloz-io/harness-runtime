@@ -59,6 +59,23 @@ Quirks:
 - `LLM_MODEL_NAME` — defaults to `gpt-4o-mini`
 - `python-dotenv` loads `.env` if present
 
+## Skills sourcing (dual-mode)
+
+`SkillsManager` (`core/session/skills.py`) sources skills from one of:
+
+1. **Image-baked** — if `HARNESS_SKILLS_IMAGE_DIR` is set and the dir exists on
+   disk with skill subdirs, skills are read from there (no git clone, no
+   `AGENTREGISTRY_GIT_*` needed). Use this for workflows that ship a derived
+   harness image (`FROM harness-runtime:dev` + `COPY skills/`).
+2. **Git clone** — default: `GitBackend("packages/builders/src/skills")` from
+   `AGENTREGISTRY_GIT_OWNER`/`AGENTREGISTRY_GIT_REPO` via the agent-vault proxy.
+
+`HARNESS_SKILLS_RUNTIME_BASE` (default `/workspace/.builder`) relocates where
+skills are exposed (routes + symlinks) for testing outside the container.
+Definition skill paths (e.g. `/workspace/.oranger/skills/<name>/`) are
+normalized to the runtime base by `core/session/skill_paths.py` in
+`Session.__init__` — only the basename is the join key.
+
 ## Known quirks
 
 - **Version mismatch**: `pyproject.toml` says `0.1.5`, `__init__.py` says `0.1.1`, egg-info says `0.1.3`

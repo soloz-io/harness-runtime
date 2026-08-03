@@ -21,6 +21,7 @@ from core.session.execution import (
     initialize_tool_registry,
     prepare_turn_input,
 )
+from core.session.skill_paths import normalize_agent_definition
 from core.session.skills import SkillsManager
 
 logger = structlog.get_logger(__name__)
@@ -40,7 +41,9 @@ class Session:
 
         self.session_id = session_id or f"sess_{uuid4().hex[:24]}"
         self.workspace_id = workspace_id
-        self.agent_definition = agent_definition
+        # Normalize skill paths to the runtime backend root (/workspace/.builder/skills/...)
+        # so LLM-visible paths match the FilesystemBackend routes and symlinks.
+        self.agent_definition = normalize_agent_definition(agent_definition)
         self.base_payload = input_payload
         self.execution_manager = execution_manager
         self.publisher = publisher
@@ -50,7 +53,7 @@ class Session:
             raise ValueError("workspace_id is required")
 
         # 1. Agent configuration
-        cfg: AgentConfig = extract_agent_config(agent_definition)
+        cfg: AgentConfig = extract_agent_config(self.agent_definition)
         self.model_name = cfg.model_name
         self.checkpointer = execution_manager.checkpointer
         persist_system_prompt(self.session_id, cfg, getattr(execution_manager, "_pool", None))
@@ -63,7 +66,7 @@ class Session:
         )
 
         # 3. Skills (git clone, temp dirs, FilesystemBackend routes, CompositeBackend)
-        self._skills_mgr = SkillsManager(agent_definition, self._backend)
+        self._skills_mgr = SkillsManager(self.agent_definition, self._backend)
         self._skills_ctx = self._skills_mgr.initialize()
 
         # 4. Tool registry (lazy — populated on first turn)

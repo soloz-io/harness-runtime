@@ -10,6 +10,21 @@ import structlog
 
 logger = structlog.get_logger(__name__)
 
+# Environment variable that points at a skills directory baked into the
+# container image. When set (and the directory exists), SkillsManager skips
+# the git clone and sources skills directly from disk.
+ENV_SKILLS_IMAGE_DIR = "HARNESS_SKILLS_IMAGE_DIR"
+
+# Runtime root where skills are exposed via FilesystemBackend routes and
+# symlinks. Overridable so the sandbox can be exercised outside the container
+# (where /workspace is not writable); default matches the production layout.
+ENV_SKILLS_RUNTIME_BASE = "HARNESS_SKILLS_RUNTIME_BASE"
+DEFAULT_SKILLS_RUNTIME_BASE = "/workspace/.builder"
+
+
+def _skills_runtime_base() -> Path:
+    return Path(os.environ.get(ENV_SKILLS_RUNTIME_BASE, DEFAULT_SKILLS_RUNTIME_BASE))
+
 
 @dataclass(frozen=True)
 class SkillsContext:
@@ -17,13 +32,27 @@ class SkillsContext:
     skill_router: Optional[Any] = None
 
 
+@dataclass(frozen=True)
+class _SkillsSource:
+    """Where skill directories live, plus the optional git clone owner.
+
+    ``git_backend`` is ``None`` in image mode; ``path`` is then the
+    image-baked skills directory.
+    """
+
+    path: Path
+    git_backend: Optional[Any] = None
+
+
 class SkillsManager:
     """Owns the full skills lifecycle: setup and teardown.
 
-    On initialization it clones the skills repository, creates per-skill
-    temporary directories, wires FilesystemBackend routes, builds a
-    CompositeBackend, and creates stable filesystem symlinks for
-    ``compile_schema`` access.  ``cleanup()`` tears everything down.
+    Skills are sourced either from a directory baked into the container image
+    (``HARNESS_SKILLS_IMAGE_DIR``) or, when unset/missing, from a git clone of
+    the skills repository. Either way it creates per-skill temporary
+    directories, wires FilesystemBackend routes, builds a CompositeBackend,
+    and creates stable filesystem symlinks for ``compile_schema`` access.
+    ``cleanup()`` tears everything down.
     """
 
     def __init__(
@@ -39,16 +68,23 @@ class SkillsManager:
         self._router: Optional[Any] = None
 
     def initialize(self) -> SkillsContext:
-        """Clone skills repo, set up per-skill routes and composite backend."""
+        """Set up skills from either an image-baked dir or a git clone."""
         skills_paths = self._collect_skills()
         if not skills_paths:
             logger.info("no_skills_defined_in_agent_definition")
             return SkillsContext()
 
-        self._git_backend = self._clone_repo()
-        cli_src = self._git_backend.repo_path / "packages" / "workflow-engine" / "bin" / "cli.cjs"
+        source = self._resolve_source()
+        cli_src: Optional[Path] = None
 
-        self._tmp_dirs = self._isolate_skills(self._git_backend.path)
+        if source.git_backend is not None:
+            # CLI (workflow-engine) is only available from the git clone.
+            cli_src = (
+                source.git_backend.repo_path / "packages" / "workflow-engine" / "bin" / "cli.cjs"
+            )
+
+        self._git_backend = source.git_backend
+        self._tmp_dirs = self._isolate_skills(source.path)
         self._copy_cli_to_skill_dirs(cli_src)
 
         skill_routes = self._build_filesystem_routes()
@@ -63,9 +99,10 @@ class SkillsManager:
         self._router = AgentSkillRouter(self._agent_definition, self._tmp_dirs)
         skill_routes.update(self._router.build_routes())
 
-        # Delete the full clone to prevent shell access from finding it
-        shutil.rmtree(str(self._git_backend.repo_path), ignore_errors=True)
-        logger.info("skills_clone_deleted", path=str(self._git_backend.repo_path))
+        if source.git_backend is not None:
+            # Delete the full clone to prevent shell access from finding it
+            shutil.rmtree(str(source.git_backend.repo_path), ignore_errors=True)
+            logger.info("skills_clone_deleted", path=str(source.git_backend.repo_path))
 
         composite_backend = self._build_composite_backend(skill_routes)
         return SkillsContext(composite_backend=composite_backend, skill_router=self._router)
@@ -78,6 +115,33 @@ class SkillsManager:
             node_skills = node.get("config", {}).get("skills", [])
             skills.extend(node_skills)
         return skills
+
+    def _resolve_source(self) -> "_SkillsSource":
+        """Resolve where skill directories come from.
+
+        Prefers a skills directory baked into the container image
+        (``HARNESS_SKILLS_IMAGE_DIR``). Falls back to a git clone when the env
+        var is unset or the directory is not present on disk.
+        """
+        image_dir = os.environ.get(ENV_SKILLS_IMAGE_DIR)
+        if image_dir:
+            path = Path(image_dir)
+            if path.is_dir():
+                subdirs = [p for p in path.iterdir() if p.is_dir()]
+                if subdirs:
+                    logger.info(
+                        "skills_image_mode",
+                        dir=str(path),
+                        skill_count=len(subdirs),
+                    )
+                    return _SkillsSource(path=path, git_backend=None)
+                logger.warning("skills_image_dir_empty", dir=str(path))
+            else:
+                logger.warning("skills_image_dir_missing", dir=str(image_dir))
+
+        git_backend = self._clone_repo()
+        logger.info("skills_git_source", path=str(git_backend.path))
+        return _SkillsSource(path=git_backend.path, git_backend=git_backend)
 
     def _clone_repo(self) -> Any:
         from core.integration.git_backend import GitBackend
@@ -97,9 +161,9 @@ class SkillsManager:
             tmp_dirs[skill_name] = tmp
         return tmp_dirs
 
-    def _copy_cli_to_skill_dirs(self, cli_src: Path) -> None:
+    def _copy_cli_to_skill_dirs(self, cli_src: Optional[Path]) -> None:
         """Copy the workflow-engine CLI into each skill's engine directory."""
-        if not cli_src.exists():
+        if cli_src is None or not cli_src.exists():
             return
         for skill_name, tmp_dir in self._tmp_dirs.items():
             engine_dir = tmp_dir / skill_name / "engine"
@@ -111,11 +175,12 @@ class SkillsManager:
     def _build_filesystem_routes(self) -> dict[str, Any]:
         """Build FilesystemBackend routes for each skill."""
         routes: dict[str, Any] = {}
+        runtime_base = _skills_runtime_base()
         try:
             from deepagents.backends.filesystem import FilesystemBackend
 
             for skill_name, tmp_dir in self._tmp_dirs.items():
-                route = f"/workspace/.builder/skills/{skill_name}/"
+                route = f"{runtime_base}/skills/{skill_name}/"
                 routes[route] = FilesystemBackend(
                     root_dir=str(tmp_dir / skill_name), virtual_mode=True
                 )
@@ -125,8 +190,8 @@ class SkillsManager:
         return routes
 
     def _create_skill_symlinks(self) -> None:
-        """Create stable symlinks at ``/workspace/.builder/skills/<name>/``."""
-        stable_root = Path("/workspace/.builder/skills")
+        """Create stable symlinks at ``<runtime_base>/skills/<name>/``."""
+        stable_root = _skills_runtime_base() / "skills"
         stable_root.mkdir(parents=True, exist_ok=True)
         for skill_name, tmp_dir in self._tmp_dirs.items():
             link_path = stable_root / skill_name
@@ -139,7 +204,8 @@ class SkillsManager:
         """Create a scratch workspace for CLI compilation output."""
         scratch_dir = Path(tempfile.mkdtemp(prefix="scratch-"))
         self._scratch_dir = str(scratch_dir)
-        scratch_route = "/workspace/.builder/scratch/"
+        runtime_base = _skills_runtime_base()
+        scratch_route = f"{runtime_base}/scratch/"
         try:
             from deepagents.backends.filesystem import FilesystemBackend
 
@@ -148,7 +214,7 @@ class SkillsManager:
         except ImportError:
             logger.warning("scratch_route_failed_deepagents_not_available")
 
-        stable_scratch = Path("/workspace/.builder/scratch")
+        stable_scratch = runtime_base / "scratch"
         stable_scratch.parent.mkdir(parents=True, exist_ok=True)
         if not stable_scratch.exists():
             os.symlink(str(scratch_dir), str(stable_scratch))
@@ -156,12 +222,12 @@ class SkillsManager:
                 "scratch_symlink_created", link=str(stable_scratch), target=str(scratch_dir)
             )
 
-    def _copy_cli_to_stable_path(self, cli_src: Path) -> None:
-        """Copy the workflow-engine CLI to ``/workspace/.builder/bin/cli.cjs``."""
-        if not cli_src.exists():
+    def _copy_cli_to_stable_path(self, cli_src: Optional[Path]) -> None:
+        """Copy the workflow-engine CLI to ``<runtime_base>/bin/cli.cjs``."""
+        if cli_src is None or not cli_src.exists():
             logger.warning("cli_source_not_found", path=str(cli_src))
             return
-        stable_dir = Path("/workspace/.builder/bin")
+        stable_dir = _skills_runtime_base() / "bin"
         stable_dir.mkdir(parents=True, exist_ok=True)
         stable_cli = stable_dir / "cli.cjs"
         if not stable_cli.exists():
@@ -170,11 +236,11 @@ class SkillsManager:
 
     def _copy_cli_manifest_to_stable_path(self) -> None:
         """Generate action manifest by invoking the workflow-engine CLI with ``--manifest``."""
-        cli_path = Path("/workspace/.builder/bin/cli.cjs")
+        cli_path = _skills_runtime_base() / "bin" / "cli.cjs"
         if not cli_path.exists():
             logger.warning("cli_not_found_for_manifest", path=str(cli_path))
             return
-        stable_dir = Path("/workspace/.builder/bin")
+        stable_dir = _skills_runtime_base() / "bin"
         stable_dir.mkdir(parents=True, exist_ok=True)
         stable_manifest = stable_dir / "action-manifest.json"
         if stable_manifest.exists():
@@ -214,7 +280,7 @@ class SkillsManager:
             self._git_backend.cleanup()
 
         # Remove skill symlinks
-        stable_skills = Path("/workspace/.builder/skills")
+        stable_skills = _skills_runtime_base() / "skills"
         if stable_skills.exists():
             for child in stable_skills.iterdir():
                 if child.is_symlink():
@@ -222,7 +288,7 @@ class SkillsManager:
             logger.info("skill_symlinks_removed")
 
         # Remove scratch symlink and temp dir
-        stable_scratch = Path("/workspace/.builder/scratch")
+        stable_scratch = _skills_runtime_base() / "scratch"
         if stable_scratch.exists() and stable_scratch.is_symlink():
             stable_scratch.unlink()
             logger.info("scratch_symlink_removed")
@@ -244,13 +310,13 @@ class SkillsManager:
             self._router.cleanup()
 
         # Remove stable CLI copy
-        stable_cli = Path("/workspace/.builder/bin/cli.cjs")
+        stable_cli = _skills_runtime_base() / "bin" / "cli.cjs"
         if stable_cli.exists():
             stable_cli.unlink()
             logger.info("stable_cli_removed", path=str(stable_cli))
 
         # Remove stable manifest copy
-        stable_manifest = Path("/workspace/.builder/bin/action-manifest.json")
+        stable_manifest = _skills_runtime_base() / "bin" / "action-manifest.json"
         if stable_manifest.exists():
             stable_manifest.unlink()
             logger.info("stable_manifest_removed", path=str(stable_manifest))
