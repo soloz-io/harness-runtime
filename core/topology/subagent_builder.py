@@ -21,15 +21,19 @@ import structlog
 from langchain.agents.middleware import HumanInTheLoopMiddleware
 from langchain_core.tools import BaseTool
 
+from core.middleware.custom_tool_middleware import CustomToolMiddleware
 from core.middleware.rubric_middleware import build_rubric_middlewares
 from core.middleware.shell_middleware import ShellMiddleware
 from core.model_factory import ModelFactory
 from core.state_schema_builder import create_state_schema_from_config
 
-# ShellMiddleware provides compile_schema for all subagents.  This runs
-# in the sandboxed pod with no additional isolation beyond the pod
-# boundary.  GitHubMiddleware (open_pull_request) is omitted here
-# because PR creation is scoped to specific agent definitions.
+# ShellMiddleware exposes compile_schema / get_action_manifest (DSL
+# compilation) plus load_skill. Only surface the DSL tools when the
+# node actually declares them; load_skill stays unconditional since
+# every specialist needs it. This runs in the sandboxed pod with no
+# additional isolation beyond the pod boundary.  GitHubMiddleware
+# (open_pull_request) is omitted here because PR creation is scoped to
+# specific agent definitions.
 
 logger = structlog.get_logger(__name__)
 
@@ -45,6 +49,7 @@ def build_subagent(
     available_tools: Dict[str, BaseTool],
     *,
     skills: list[str] | None = None,
+    tools_spec: Any = None,
 ) -> dict[str, Any]:  # Returns SubAgent dict
     """
     Build a SubAgent spec from specialist configuration.
@@ -141,6 +146,7 @@ def build_subagent(
             brief_description,
             response_format,
             skills=skills,
+            tools_spec=tools_spec,
         )
 
     except Exception as e:
@@ -163,6 +169,7 @@ def _build_subagent_spec(
     response_format: Any = None,
     *,
     skills: list[str] | None = None,
+    tools_spec: Any = None,
 ) -> dict[str, Any]:
     """Build a declarative SubAgent dict.
 
@@ -171,7 +178,7 @@ def _build_subagent_spec(
     TodoListMiddleware, FilesystemMiddleware, SummarizationMiddleware,
     PatchToolCallsMiddleware, and SkillsMiddleware (if skills are set).
     This function only provides middleware that create_deep_agent does not:
-    RubricMiddleware, ShellMiddleware.
+    RubricMiddleware, ShellMiddleware, CustomToolMiddleware.
     """
 
     state_schema_config = specialist_config.get("state_schema")
@@ -193,7 +200,21 @@ def _build_subagent_spec(
         rubric_middlewares = build_rubric_middlewares(rubric_config, model_instance)
         middleware_stack.extend(rubric_middlewares)
 
-    middleware_stack.append(ShellMiddleware())
+    declared_tool_names = set(specialist_config.get("tools", []))
+    shell_middleware = ShellMiddleware()
+    shell_middleware.tools = [
+        t for t in ShellMiddleware.tools if t.name == "load_skill" or t.name in declared_tool_names
+    ]
+    middleware_stack.append(shell_middleware)
+
+    # Add CustomToolMiddleware if the node has a tools folder
+    if tools_spec:
+        middleware_stack.append(CustomToolMiddleware(tools_spec.tools_dir))
+        logger.info(
+            "custom_tool_middleware_appended",
+            agent_name=agent_name,
+            tools_dir=str(tools_spec.tools_dir),
+        )
 
     if specialist_config.get("interrupt_on"):
         middleware_stack.append(

@@ -36,6 +36,7 @@ def build_graph(
     session_id: str,
     backend: Any,
     composite_backend: Any,
+    tools_ctx: Any = None,
 ) -> Any:
     """Build a compiled LangGraph from the agent definition.
 
@@ -50,6 +51,7 @@ def build_graph(
         session_id=session_id,
         backend=backend,
         composite_backend=composite_backend,
+        tools_ctx=tools_ctx,
     )
 
 

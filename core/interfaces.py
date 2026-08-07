@@ -21,6 +21,7 @@ class TopologyBuilder(Protocol):
         backend: Any = None,
         skills: list[str] | None = None,
         composite_backend: Any = None,
+        tools_ctx: Any = None,
     ) -> Runnable[Any, Any]:
         """Compile and return a runnable graph based on the specific topology strategy.
 
@@ -34,6 +35,7 @@ class TopologyBuilder(Protocol):
             backend: Pre-built ArtifactBackend instance (takes priority over workspace_id/session_id/db_pool).
             skills: List of skill paths for SkillsMiddleware discovery.
             composite_backend: Pre-built CompositeBackend for skills file access.
+            tools_ctx: ToolsContext with per-node tool specs for CustomToolMiddleware.
 
         Returns:
             A runnable graph.

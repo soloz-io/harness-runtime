@@ -52,7 +52,7 @@ def write_chat_messages(
     session_id: str,
     messages: list[dict[str, Any]],
     offset: int,
-    source: str = "runtime",
+    source: str = "deepagents",
 ) -> None:
     """Insert new messages into chat_messages.
 
@@ -60,7 +60,7 @@ def write_chat_messages(
     graph.  Duplicates are silently ignored via ON CONFLICT DO NOTHING.
 
     The ``source`` parameter distinguishes the origin of messages:
-    - ``'runtime'`` (default) — orchestrator messages from root namespace
+    - ``'deepagents'`` (default) — orchestrator messages from root namespace
     - ``'subagent'`` — sub-agent internal reasoning from sub-agent namespace
     - ``'stream'`` — SDK-initiated inserts
 

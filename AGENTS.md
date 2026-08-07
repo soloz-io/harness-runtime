@@ -59,22 +59,25 @@ Quirks:
 - `LLM_MODEL_NAME` — defaults to `gpt-4o-mini`
 - `python-dotenv` loads `.env` if present
 
-## Skills sourcing (dual-mode)
+## Skills sourcing
 
-`SkillsManager` (`core/session/skills.py`) sources skills from one of:
+`SkillsManager` (`core/session/skills.py`) sources skills from the container
+image. `HARNESS_IMAGE_DIR` is required — there is no git-clone fallback.
 
-1. **Image-baked** — if `HARNESS_SKILLS_IMAGE_DIR` is set and the dir exists on
-   disk with skill subdirs, skills are read from there (no git clone, no
-   `AGENTREGISTRY_GIT_*` needed). Use this for workflows that ship a derived
-   harness image (`FROM harness-runtime:dev` + `COPY skills/`).
-2. **Git clone** — default: `GitBackend("packages/builders/src/skills")` from
-   `AGENTREGISTRY_GIT_OWNER`/`AGENTREGISTRY_GIT_REPO` via the agent-vault proxy.
+SkillsManager resolves per-node skills from:
+
+```
+{HARNESS_IMAGE_DIR}/{node-id}/skills/
+```
+
+Each derived harness image (e.g. `oranger-sandbox:1.0.0`, `builder-sandbox:1.0.0`) bakes
+agents into `/app/{name}/agents` and sets `HARNESS_IMAGE_DIR` to that path.
 
 `HARNESS_SKILLS_RUNTIME_BASE` (default `/workspace/.builder`) relocates where
 skills are exposed (routes + symlinks) for testing outside the container.
-Definition skill paths (e.g. `/workspace/.oranger/skills/<name>/`) are
-normalized to the runtime base by `core/session/skill_paths.py` in
-`Session.__init__` — only the basename is the join key.
+Definition skill paths are normalized to the runtime base by
+`core/session/skill_paths.py` in `Session.__init__` — only the basename is
+the join key.
 
 ## Known quirks
 

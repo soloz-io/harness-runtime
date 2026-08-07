@@ -3,8 +3,9 @@ not the container root filesystem.
 
 Uses the real definition.json fixture from tests/mock/ with prompts
 resolved inline. Exercises the full production stack:
-  HTTP server (subprocess) → Session._init_skills() → GitBackend
-  → CompositeBackend → FilesystemBackend(virtual_mode=True)
+  HTTP server (subprocess) → Session._init_skills()
+  → agents/{node-id}/skills/ (image mode) → CompositeBackend
+  → FilesystemBackend(virtual_mode=True)
   → create_deep_agent → SubAgent spec → SkillsMiddleware
 
 Business journey:
@@ -17,9 +18,8 @@ Business journey:
 Requires:
   AI_GATEWAY_API_KEY       — LLM gateway key (same value as DEEPSEEK_API_KEY)
   DATABASE_URL             — PostgreSQL connection string
-  AGENTREGISTRY_GIT_OWNER  — GitHub owner for skills repo
-  AGENTREGISTRY_GIT_REPO   — GitHub repo name for skills clone
-  AGENTREGISTRY_GITHUB_TOKEN — GitHub token for skills clone auth
+  HARNESS_IMAGE_DIR — agents/ root containing
+                             agents/workflow-architect/skills/workflow-model-designer/
   redis-server             — available on PATH
 
 Business journey assertions:
@@ -32,9 +32,7 @@ Business journey assertions:
 Run with:
   export AI_GATEWAY_API_KEY="sk-..."
   export DATABASE_URL="postgresql://..."
-  export AGENTREGISTRY_GIT_OWNER="..."
-  export AGENTREGISTRY_GIT_REPO="..."
-  export AGENTREGISTRY_GITHUB_TOKEN="ghp_..."
+  export HARNESS_IMAGE_DIR="../waypoint/packages/builders/agents"
   PYTHONPATH=. uv run pytest tests/integration_tests/skills/ -v
 
   Or use scripts/test-setup.sh which handles all env vars + infrastructure.

@@ -1,7 +1,7 @@
 """Unit tests for image-baked skills support.
 
 Covers:
-  - SkillsManager sourcing skills from ``HARNESS_SKILLS_IMAGE_DIR`` without
+  - SkillsManager sourcing skills from ``HARNESS_IMAGE_DIR`` without
     performing a git clone.
   - FilesystemBackend routes + symlinks built under the configured runtime base.
   - AgentSkillRouter wrapper routes using normalized skill names.
@@ -20,8 +20,9 @@ import pytest
 
 from core.session.skills import (
     DEFAULT_SKILLS_RUNTIME_BASE,
-    ENV_SKILLS_IMAGE_DIR,
+    ENV_IMAGE_DIR,
     ENV_SKILLS_RUNTIME_BASE,
+    SkillsError,
     SkillsManager,
 )
 from core.session.skill_paths import (
@@ -37,14 +38,15 @@ class _FakeArtifactBackend:
 
 @pytest.fixture()
 def image_skills_dir(tmp_path: Path) -> Path:
-    """A fake image-baked skills directory."""
-    skills_dir = tmp_path / "image-skills"
+    """A fake image-baked agents root: ``agents/<node-id>/skills/<name>/``."""
+    agents_dir = tmp_path / "image-agents"
     for name in ("chronixel-video", "remotion-captions"):
-        (skills_dir / name).mkdir(parents=True)
-        (skills_dir / name / "SKILL.md").write_text(f"# {name}\n\nGuidance for {name}.\n")
-        (skills_dir / name / "references").mkdir()
-        (skills_dir / name / "references" / "guide.md").write_text(f"Ref for {name}.\n")
-    return skills_dir
+        skill_dir = agents_dir / "specialist" / "skills" / name
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(f"# {name}\n\nGuidance for {name}.\n")
+        (skill_dir / "references").mkdir()
+        (skill_dir / "references" / "guide.md").write_text(f"Ref for {name}.\n")
+    return agents_dir
 
 
 def _definition(skills: list[str]) -> dict:
@@ -74,7 +76,7 @@ def runtime_base(tmp_path: Path) -> Path:
 
 @pytest.fixture()
 def env_setup(monkeypatch: pytest.MonkeyPatch, image_skills_dir: Path, runtime_base: Path) -> None:
-    monkeypatch.setenv(ENV_SKILLS_IMAGE_DIR, str(image_skills_dir))
+    monkeypatch.setenv(ENV_IMAGE_DIR, str(image_skills_dir))
     monkeypatch.setenv(ENV_SKILLS_RUNTIME_BASE, str(runtime_base))
 
 
@@ -114,9 +116,6 @@ def test_skills_manager_uses_image_dir_without_git_clone(
     ctx = manager.initialize()
 
     try:
-        # No git clone performed
-        assert manager._git_backend is None
-
         # Routes are keyed by the runtime skills base
         assert ctx.composite_backend is not None
         routes = ctx.composite_backend.routes
@@ -160,11 +159,11 @@ def test_skills_manager_image_mode_load_skill_via_symlink(
         manager.cleanup()
 
 
-def test_skills_manager_falls_back_when_image_dir_missing(
+def test_skills_manager_image_dir_missing_hard_errors(
     monkeypatch: pytest.MonkeyPatch, runtime_base: Path
 ) -> None:
-    # Point the env at a nonexistent dir — must not silently succeed.
-    monkeypatch.setenv(ENV_SKILLS_IMAGE_DIR, str(runtime_base / "nope"))
+    # Point the env at a nonexistent dir — must raise (no git fallback).
+    monkeypatch.setenv(ENV_IMAGE_DIR, str(runtime_base / "nope"))
     monkeypatch.setenv(ENV_SKILLS_RUNTIME_BASE, str(runtime_base))
 
     manager = SkillsManager(
@@ -172,9 +171,41 @@ def test_skills_manager_falls_back_when_image_dir_missing(
         _FakeArtifactBackend(),
     )
 
-    # Git fallback raises because AGENTREGISTRY_GIT_OWNER/REPO are unset here.
-    with pytest.raises(Exception):
+    with pytest.raises(SkillsError):
         manager.initialize()
+
+
+def test_skills_manager_image_dir_unset_hard_errors(
+    monkeypatch: pytest.MonkeyPatch, runtime_base: Path
+) -> None:
+    monkeypatch.delenv(ENV_IMAGE_DIR, raising=False)
+    monkeypatch.setenv(ENV_SKILLS_RUNTIME_BASE, str(runtime_base))
+
+    manager = SkillsManager(
+        _definition(["/workspace/.oranger/skills/chronixel-video/"]),
+        _FakeArtifactBackend(),
+    )
+
+    with pytest.raises(SkillsError):
+        manager.initialize()
+
+
+def test_skills_manager_isolates_only_nodes_with_skills(
+    monkeypatch: pytest.MonkeyPatch, image_skills_dir: Path, runtime_base: Path
+) -> None:
+    monkeypatch.setenv(ENV_IMAGE_DIR, str(image_skills_dir))
+    monkeypatch.setenv(ENV_SKILLS_RUNTIME_BASE, str(runtime_base))
+
+    manager = SkillsManager(
+        _definition(["/workspace/.oranger/skills/chronixel-video/"]),
+        _FakeArtifactBackend(),
+    )
+    try:
+        manager.initialize()
+        # Reads from agents/specialist/skills/ (the node that declares skills).
+        assert set(manager._tmp_dirs) == {"chronixel-video", "remotion-captions"}
+    finally:
+        manager.cleanup()
 
 
 def test_default_runtime_base_is_production_path() -> None:

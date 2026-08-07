@@ -24,6 +24,7 @@ def build_agent_from_definition(
     backend: Any = None,
     skills: list[str] | None = None,
     composite_backend: Any = None,
+    tools_ctx: Any = None,
 ) -> Runnable[Any, Any]:
     """
     Build a complete LangGraph graph from an agent definition.
@@ -63,6 +64,7 @@ def build_agent_from_definition(
         "session_id": session_id,
         "db_pool": db_pool,
         "backend": backend,
+        "tools_ctx": tools_ctx,
     }
     if not is_acrylic:
         build_kwargs["skills"] = skills

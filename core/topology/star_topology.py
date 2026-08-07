@@ -12,6 +12,7 @@ from langchain_core.runnables import Runnable
 from langchain_quickjs import CodeInterpreterMiddleware
 
 from core.interfaces import TopologyBuilder
+from core.middleware.custom_tool_middleware import CustomToolMiddleware
 from core.middleware.human_interaction import HumanInteractionMiddleware
 from core.middleware.rubric_middleware import build_rubric_middlewares
 from core.middleware.structured_output import build_tool_strategy, resolve_structured_output_model
@@ -43,6 +44,7 @@ class StarTopologyBuilder(TopologyBuilder):
         backend: Any = None,
         skills: list[str] | None = None,
         composite_backend: Any = None,
+        tools_ctx: Any = None,
     ) -> Runnable[Any, Any]:
         """Build the start topology graph."""
         nodes = definition.get("nodes", [])
@@ -85,10 +87,13 @@ class StarTopologyBuilder(TopologyBuilder):
         for specialist_node in specialist_configs:
             specialist_config = specialist_node.get("config", {})
             specialist_skills = specialist_config.get("skills")
+            node_id = specialist_node.get("id", "")
+            tools_spec = tools_ctx.node_tools.get(node_id) if tools_ctx else None
             sub_agent = build_subagent(
                 specialist_config,
                 available_tools,
                 skills=specialist_skills,
+                tools_spec=tools_spec,
             )
             compiled_subagents.append(sub_agent)
 
@@ -182,6 +187,20 @@ class StarTopologyBuilder(TopologyBuilder):
         middleware_stack.append(CodeInterpreterMiddleware(timeout=300))
         logger.info("code_interpreter_middleware_appended")
         middleware_stack.append(HumanInteractionMiddleware())
+
+        # Add CustomToolMiddleware for orchestrator if it has a tools folder
+        orchestrator_node_id = orchestrator_config.get("id", "")
+        orchestrator_tools_spec = (
+            tools_ctx.node_tools.get(orchestrator_node_id) if tools_ctx else None
+        )
+        if orchestrator_tools_spec:
+            middleware_stack.append(CustomToolMiddleware(orchestrator_tools_spec.tools_dir))
+            logger.info(
+                "custom_tool_middleware_appended_orchestrator",
+                node_id=orchestrator_node_id,
+                tools_dir=str(orchestrator_tools_spec.tools_dir),
+            )
+
         if middleware_stack:
             deep_agent_kwargs["middleware"] = middleware_stack
 

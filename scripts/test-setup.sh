@@ -12,9 +12,8 @@ set -euo pipefail
 # Required env vars in harness-runtime/.env:
 #   AI_GATEWAY_API_KEY  — LLM gateway key
 #   DATABASE_URL  — PostgreSQL connection string
-#   AGENTREGISTRY_GIT_OWNER  — GitHub owner for skills repo
-#   AGENTREGISTRY_GIT_REPO   — GitHub repo name for skills clone
-#   AGENTREGISTRY_GITHUB_TOKEN  — GitHub token for skills clone auth
+#   HARNESS_IMAGE_DIR  — path to a builders-style agents/ root, e.g.
+#                               ../waypoint/packages/builders/agents
 #
 # Examples:
 #   ./scripts/test-setup.sh                                       # all tests
@@ -40,9 +39,7 @@ if [ ! -f "$HARNESS_ENV" ]; then
   echo "   Create it with at least:"
   echo "     AI_GATEWAY_API_KEY=sk-..."
   echo "     DATABASE_URL=postgresql://waypoint:waypoint@localhost:5433/waypoint_test"
-  echo "     AGENTREGISTRY_GIT_OWNER=soloz-io"
-  echo "     AGENTREGISTRY_GIT_REPO=agentregistry"
-  echo "     AGENTREGISTRY_GITHUB_TOKEN=ghp_..."
+  echo "     HARNESS_IMAGE_DIR=../waypoint/packages/builders/agents"
   exit 1
 fi
 
@@ -64,9 +61,7 @@ done < <(grep -vE '^\s*(#|$)' "$HARNESS_ENV" || true)
 MISSING=""
 [ -z "${AI_GATEWAY_API_KEY:-}" ]           && MISSING="$MISSING AI_GATEWAY_API_KEY"
 [ -z "${DATABASE_URL:-}" ]                 && MISSING="$MISSING DATABASE_URL"
-[ -z "${AGENTREGISTRY_GIT_OWNER:-}" ]      && MISSING="$MISSING AGENTREGISTRY_GIT_OWNER"
-[ -z "${AGENTREGISTRY_GIT_REPO:-}" ]       && MISSING="$MISSING AGENTREGISTRY_GIT_REPO"
-[ -z "${AGENTREGISTRY_GITHUB_TOKEN:-}" ]   && MISSING="$MISSING AGENTREGISTRY_GITHUB_TOKEN"
+[ -z "${HARNESS_IMAGE_DIR:-}" ]      && MISSING="$MISSING HARNESS_IMAGE_DIR"
 
 if [ -n "$MISSING" ]; then
   echo ""

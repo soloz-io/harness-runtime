@@ -4,6 +4,7 @@ Thin orchestrator that delegates to focused sub-modules:
 - ``config``: agent configuration extraction and persistence
 - ``backends``: ArtifactBackend construction
 - ``skills``: SkillsManager for skills lifecycle
+- ``tools``: ToolsManager for CLI tools lifecycle
 - ``execution``: graph construction, input preparation, turn helpers
 """
 
@@ -23,6 +24,7 @@ from core.session.execution import (
 )
 from core.session.skill_paths import normalize_agent_definition
 from core.session.skills import SkillsManager
+from core.session.tools import ToolsManager
 
 logger = structlog.get_logger(__name__)
 
@@ -69,7 +71,11 @@ class Session:
         self._skills_mgr = SkillsManager(self.agent_definition, self._backend)
         self._skills_ctx = self._skills_mgr.initialize()
 
-        # 4. Tool registry (lazy — populated on first turn)
+        # 4. CLI tools (image-baked tools/<node-id>/ for run_tool dispatch)
+        self._tools_mgr = ToolsManager(self.agent_definition)
+        self._tools_ctx = self._tools_mgr.initialize()
+
+        # 5. Tool registry (lazy — populated on first turn)
         self._tool_registry: Optional[Any] = None
         self._initialized = False
 
@@ -140,6 +146,7 @@ class Session:
 
     async def cleanup(self) -> None:
         self._skills_mgr.cleanup()
+        self._tools_mgr.cleanup()
 
     # ── internal helpers ──────────────────────────────────────────────
 
@@ -160,4 +167,5 @@ class Session:
             session_id=self.session_id,
             backend=self._backend,
             composite_backend=self._skills_ctx.composite_backend if self._skills_ctx else None,
+            tools_ctx=self._tools_ctx,
         )
