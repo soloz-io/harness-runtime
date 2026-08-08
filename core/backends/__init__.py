@@ -1,3 +1,3 @@
-from core.backends.artifact import ArtifactBackend
+from core.backends.artifact import SessionArtifactBackend
 
-__all__ = ["ArtifactBackend"]
+__all__ = ["SessionArtifactBackend"]

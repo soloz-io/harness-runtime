@@ -27,11 +27,11 @@ from core.middleware.shell_middleware import ShellMiddleware
 from core.model_factory import ModelFactory
 from core.state_schema_builder import create_state_schema_from_config
 
-# ShellMiddleware exposes compile_schema / get_action_manifest (DSL
-# compilation) plus load_skill. Only surface the DSL tools when the
-# node actually declares them; load_skill stays unconditional since
-# every specialist needs it. This runs in the sandboxed pod with no
-# additional isolation beyond the pod boundary.  GitHubMiddleware
+# ShellMiddleware exposes load_skill, which stays unconditional since
+# every specialist needs it. DSL compilation and action-manifest
+# discovery are provided via CustomToolMiddleware's run_tool dispatch.
+# This runs in the sandboxed pod with no additional isolation beyond
+# the pod boundary.  GitHubMiddleware
 # (open_pull_request) is omitted here because PR creation is scoped to
 # specific agent definitions.
 
@@ -200,20 +200,15 @@ def _build_subagent_spec(
         rubric_middlewares = build_rubric_middlewares(rubric_config, model_instance)
         middleware_stack.extend(rubric_middlewares)
 
-    declared_tool_names = set(specialist_config.get("tools", []))
-    shell_middleware = ShellMiddleware()
-    shell_middleware.tools = [
-        t for t in ShellMiddleware.tools if t.name == "load_skill" or t.name in declared_tool_names
-    ]
-    middleware_stack.append(shell_middleware)
+    middleware_stack.append(ShellMiddleware())
 
     # Add CustomToolMiddleware if the node has a tools folder
     if tools_spec:
-        middleware_stack.append(CustomToolMiddleware(tools_spec.tools_dir))
+        middleware_stack.append(CustomToolMiddleware(tools_spec.search_dirs))
         logger.info(
             "custom_tool_middleware_appended",
             agent_name=agent_name,
-            tools_dir=str(tools_spec.tools_dir),
+            tools_dirs=[str(d) for d in tools_spec.search_dirs],
         )
 
     if specialist_config.get("interrupt_on"):

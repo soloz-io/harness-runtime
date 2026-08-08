@@ -38,11 +38,13 @@ class Session:
         publisher: EventPublisher,
         session_id: Optional[str] = None,
         workspace_id: str = "",
+        app_id: Optional[str] = None,
     ) -> None:
         from uuid import uuid4
 
         self.session_id = session_id or f"sess_{uuid4().hex[:24]}"
         self.workspace_id = workspace_id
+        self.app_id = app_id
         # Normalize skill paths to the runtime backend root (/workspace/.builder/skills/...)
         # so LLM-visible paths match the FilesystemBackend routes and symlinks.
         self.agent_definition = normalize_agent_definition(agent_definition)
@@ -65,6 +67,7 @@ class Session:
             workspace_id,
             self.session_id,
             getattr(execution_manager, "_pool", None),
+            app_id=app_id,
         )
 
         # 3. Skills (git clone, temp dirs, FilesystemBackend routes, CompositeBackend)
@@ -107,6 +110,8 @@ class Session:
             agent_definition=self.agent_definition,
             num_turns=self.turns,
             resume_payload=resume,
+            workspace_id=self.workspace_id,
+            app_id=self.app_id,
         )
         return result
 
@@ -126,6 +131,8 @@ class Session:
             agent_definition=self.agent_definition,
             num_turns=self.turns,
             resume_payload=resume,
+            workspace_id=self.workspace_id,
+            app_id=self.app_id,
         )
         return result
 
@@ -141,6 +148,8 @@ class Session:
             agent_definition=self.agent_definition,
             num_turns=self.turns,
             resume_payload=resume_payload,
+            workspace_id=self.workspace_id,
+            app_id=self.app_id,
         )
         return result
 

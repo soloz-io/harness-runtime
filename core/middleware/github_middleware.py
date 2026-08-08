@@ -30,10 +30,9 @@ def open_pull_request(
     in the harness process.
 
     Use this to OPEN a NEW pull request. Push your branch with
-    ``git push origin <branch>`` BEFORE calling this tool. For everything else —
-    updating an existing PR, marking it ready for review — use ``compile_schema``
-    via ``ShellMiddleware``. If a PR already exists for the branch, this returns
-    that PR's URL without creating a duplicate.
+    ``git push origin <branch>`` BEFORE calling this tool. If a PR already
+    exists for the branch, this returns that PR's URL without creating a
+    duplicate.
 
     Args:
         owner: Repository owner/org (e.g. "soloz-io").

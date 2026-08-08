@@ -122,7 +122,7 @@ def test_run_tool_rejects_path_traversal(env_setup: None, image_tools_dir: Path)
     from core.middleware.custom_tool_middleware import CustomToolMiddleware
 
     tools_dir = image_tools_dir / "motion-graphics" / "tools"
-    mw = CustomToolMiddleware(tools_dir)
+    mw = CustomToolMiddleware([tools_dir])
 
     run_tool = mw.tools[0]
     result = run_tool.invoke({"tool_name": "../../../etc/passwd", "cli_args": ""})
@@ -133,7 +133,7 @@ def test_run_tool_rejects_unknown_tool(env_setup: None, image_tools_dir: Path) -
     from core.middleware.custom_tool_middleware import CustomToolMiddleware
 
     tools_dir = image_tools_dir / "motion-graphics" / "tools"
-    mw = CustomToolMiddleware(tools_dir)
+    mw = CustomToolMiddleware([tools_dir])
 
     run_tool = mw.tools[0]
     result = run_tool.invoke({"tool_name": "nonexistent_tool", "cli_args": ""})
@@ -144,9 +144,71 @@ def test_run_tool_lists_available_tools(env_setup: None, image_tools_dir: Path) 
     from core.middleware.custom_tool_middleware import CustomToolMiddleware
 
     tools_dir = image_tools_dir / "motion-graphics" / "tools"
-    mw = CustomToolMiddleware(tools_dir)
+    mw = CustomToolMiddleware([tools_dir])
 
     run_tool = mw.tools[0]
     result = run_tool.invoke({"tool_name": "nonexistent_tool", "cli_args": ""})
     assert "seg_cli" in result["output"]
     assert "clips_cli" in result["output"]
+
+
+# ── shared/tools/ discovery + resolution ────────────────────────────────────
+
+
+def test_tools_manager_merges_shared_tools_into_every_node(
+    monkeypatch: pytest.MonkeyPatch, image_tools_dir: Path
+) -> None:
+    (image_tools_dir / "shared" / "tools").mkdir(parents=True)
+    (image_tools_dir / "shared" / "tools" / "compile_schema_cli.py").write_text("print('ok')")
+
+    monkeypatch.setenv(ENV_IMAGE_DIR, str(image_tools_dir))
+    # "bare-node" has no own tools/ dir but must still get shared tools.
+    manager = ToolsManager(_definition(["motion-graphics", "bare-node"]))
+    ctx = manager.initialize()
+
+    assert "motion-graphics" in ctx.node_tools
+    assert "bare-node" in ctx.node_tools
+    spec = ctx.node_tools["bare-node"]
+    assert spec.tools_dir is None
+    assert spec.shared_dir == image_tools_dir / "shared" / "tools"
+    assert spec.search_dirs == [image_tools_dir / "shared" / "tools"]
+    # Node-specific dir takes precedence over the shared dir.
+    mg = ctx.node_tools["motion-graphics"]
+    assert mg.search_dirs == [
+        image_tools_dir / "motion-graphics" / "tools",
+        image_tools_dir / "shared" / "tools",
+    ]
+
+
+def test_run_tool_resolves_shared_tool(
+    monkeypatch: pytest.MonkeyPatch, image_tools_dir: Path
+) -> None:
+    from core.middleware.custom_tool_middleware import CustomToolMiddleware
+
+    shared_dir = image_tools_dir / "shared" / "tools"
+    shared_dir.mkdir(parents=True)
+    (shared_dir / "compile_schema_cli.py").write_text("print('compiled')")
+
+    mw = CustomToolMiddleware([shared_dir])
+    run_tool = mw.tools[0]
+    result = run_tool.invoke({"tool_name": "compile_schema_cli", "cli_args": ""})
+    assert result["success"] is True
+    assert "compiled" in result["output"]
+
+
+def test_run_tool_prefers_node_dir_over_shared(
+    monkeypatch: pytest.MonkeyPatch, image_tools_dir: Path
+) -> None:
+    from core.middleware.custom_tool_middleware import CustomToolMiddleware
+
+    node_dir = image_tools_dir / "motion-graphics" / "tools"
+    shared_dir = image_tools_dir / "shared" / "tools"
+    shared_dir.mkdir(parents=True)
+    (node_dir / "seg_cli.py").write_text("print('node-seg')")
+    (shared_dir / "seg_cli.py").write_text("print('shared-seg')")
+
+    mw = CustomToolMiddleware([node_dir, shared_dir])
+    run_tool = mw.tools[0]
+    result = run_tool.invoke({"tool_name": "seg_cli", "cli_args": ""})
+    assert result["success"] is True
+    assert "node-seg" in result["output"]

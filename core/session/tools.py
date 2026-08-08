@@ -1,8 +1,9 @@
 """Image-baked CLI tools support for agent sessions.
 
 Mirrors ``SkillsManager`` but for the ``tools/`` folder instead of ``skills/``.
-Scans the container image at ``{HARNESS_IMAGE_DIR}/{node-id}/tools/`` and
-exposes matched nodes via a ``ToolsContext`` consumed by the topology builder.
+Scans the container image at ``{HARNESS_IMAGE_DIR}/{node-id}/tools/`` plus the
+app-wide ``{HARNESS_IMAGE_DIR}/shared/tools/`` and exposes matched nodes via a
+``ToolsContext`` consumed by the topology builder.
 
 Agents only *execute* these tools via ``CustomToolMiddleware``; they do not
 read or modify the scripts, so no FilesystemBackend routes or symlinks are
@@ -33,10 +34,27 @@ class ToolsError(RuntimeError):
 
 @dataclass(frozen=True)
 class ToolSpec:
-    """Resolved location + allow-list for a single node's CLI tools."""
+    """Resolved locations for a single node's CLI tools.
+
+    ``tools_dir`` is the node-specific ``agents/<node-id>/tools/`` folder
+    (``None`` when the node has none). ``shared_dir`` is the app-wide
+    ``agents/shared/tools/`` folder merged into every node's ``run_tool``
+    dispatch (``None`` when absent).
+    """
 
     node_id: str
-    tools_dir: Path  # absolute path in the container image
+    tools_dir: Path | None = None
+    shared_dir: Path | None = None
+
+    @property
+    def search_dirs(self) -> list[Path]:
+        """Node-specific dir first, then the app-wide shared dir."""
+        dirs: list[Path] = []
+        if self.tools_dir is not None:
+            dirs.append(self.tools_dir)
+        if self.shared_dir is not None:
+            dirs.append(self.shared_dir)
+        return dirs
 
 
 @dataclass(frozen=True)
@@ -44,7 +62,7 @@ class ToolsContext:
     """Immutable context passed through session → topology → middleware."""
 
     node_tools: dict[str, ToolSpec] = field(default_factory=dict)
-    """Mapping of ``node_id`` → ``ToolSpec`` for every node that has a tools folder."""
+    """Mapping of ``node_id`` → ``ToolSpec`` for every node that has tools."""
 
 
 def _resolve_image_dir() -> Path:
@@ -65,7 +83,8 @@ class ToolsManager:
     """Owns the tools lifecycle: discovery and teardown.
 
     ``initialize()`` scans the image-baked agents root for
-    ``agents/<node-id>/tools/`` directories and returns a ``ToolsContext``
+    ``agents/<node-id>/tools/`` directories, plus the app-wide
+    ``agents/shared/tools/`` directory, and returns a ``ToolsContext``
     that the topology builder threads into ``CustomToolMiddleware``.
     """
 
@@ -80,15 +99,23 @@ class ToolsManager:
             logger.warning("tools_image_dir_missing")
             return ToolsContext()
 
+        shared_dir = image_dir / "shared" / TOOLS_SUBDIR
+        if shared_dir.is_dir():
+            logger.info("shared_tools_discovered", path=str(shared_dir))
+        else:
+            shared_dir = None
+
         node_tools: dict[str, ToolSpec] = {}
         for node in self._agent_definition.get("nodes", []):
             node_id = node.get("id", "")
             if not node_id:
                 continue
-            candidate = image_dir / node_id / TOOLS_SUBDIR
-            if candidate.is_dir():
-                node_tools[node_id] = ToolSpec(node_id=node_id, tools_dir=candidate)
-                logger.info("tools_discovered", node_id=node_id, path=str(candidate))
+            own_dir = image_dir / node_id / TOOLS_SUBDIR
+            own = own_dir if own_dir.is_dir() else None
+            if own is None and shared_dir is None:
+                continue
+            node_tools[node_id] = ToolSpec(node_id=node_id, tools_dir=own, shared_dir=shared_dir)
+            logger.info("tools_discovered", node_id=node_id, path=str(own or shared_dir))
 
         if not node_tools:
             logger.info("no_nodes_with_tools")

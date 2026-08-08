@@ -83,7 +83,13 @@ class RootValuesHandler(EventHandler):
                         prev_count=prev_count,
                     )
                     write_chat_messages(self._pool, session_id, serialized, prev_count)
-                    write_agent_output_files(self._pool, session_id, state.last_files)
+                    write_agent_output_files(
+                        self._pool,
+                        session_id,
+                        state.last_files,
+                        workspace_id=state.workspace_id,
+                        app_id=state.app_id,
+                    )
                 else:
                     logger.warning(
                         "handle_values_no_pool_skipping_message_write",

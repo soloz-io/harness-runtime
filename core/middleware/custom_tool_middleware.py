@@ -22,8 +22,14 @@ from langchain_core.tools import tool as lc_tool
 logger = structlog.get_logger(__name__)
 
 
-def _build_run_tool(tools_dir: Path):
-    """Factory: create a ``run_tool`` closure bound to *tools_dir*."""
+def _build_run_tool(tools_dirs: list[Path]):
+    """Factory: create a ``run_tool`` closure bound to *tools_dirs*.
+
+    Scripts are resolved against the node's ``tools/`` folder first, then the
+    app-wide ``shared/tools/`` folder.  The working directory is the folder
+    that contained the script so relative imports (``workdir``, ``services``)
+    resolve correctly.
+    """
 
     @lc_tool("run_tool")
     def run_tool(tool_name: str, cli_args: str = "", timeout: int = 600) -> dict[str, Any]:
@@ -49,13 +55,22 @@ def _build_run_tool(tools_dir: Path):
                 "exit_code": -1,
             }
 
-        script = tools_dir / f"{tool_name}.py"
-        if not script.exists():
-            available = sorted(p.stem for p in tools_dir.glob("*_cli.py"))
+        # ── resolve script (node dir first, then shared dir) ────────
+        script: Path | None = None
+        script_dir: Path | None = None
+        for d in tools_dirs:
+            candidate = d / f"{tool_name}.py"
+            if candidate.exists():
+                script = candidate
+                script_dir = d
+                break
+
+        if script is None or script_dir is None:
+            available = sorted(p.stem for d in tools_dirs for p in d.glob("*_cli.py"))
             return {
                 "success": False,
                 "output": (
-                    f"Tool '{tool_name}' not found at {script}.\n"
+                    f"Tool '{tool_name}' not found.\n"
                     f"Available tools: {', '.join(available) if available else '(none)'}"
                 ),
                 "exit_code": -1,
@@ -66,7 +81,12 @@ def _build_run_tool(tools_dir: Path):
         if cli_args.strip():
             cmd.extend(shlex.split(cli_args))
 
-        logger.info("run_tool", tool_name=tool_name, cli_args=cli_args, cwd=str(tools_dir))
+        logger.info(
+            "run_tool",
+            tool_name=tool_name,
+            cli_args=cli_args,
+            cwd=str(script_dir),
+        )
 
         try:
             result = subprocess.run(
@@ -74,7 +94,7 @@ def _build_run_tool(tools_dir: Path):
                 capture_output=True,
                 text=True,
                 timeout=timeout,
-                cwd=str(tools_dir),
+                cwd=str(script_dir),
             )
             return {
                 "success": result.returncode == 0,
@@ -100,16 +120,17 @@ def _build_run_tool(tools_dir: Path):
 class CustomToolMiddleware(AgentMiddleware):
     """Middleware that exposes pipeline CLI tools as a single ``run_tool`` dispatch.
 
-    Constructed per-node by the topology builder when a node has a
-    ``tools/`` folder in the container image.  The agent calls
+    Constructed per-node by the topology builder when a node has access to
+    ``tools/`` folders in the container image (own folder plus the app-wide
+    ``shared/tools/``).  The agent calls
     ``run_tool(tool_name="seg_cli", args="--scene-duration 6.0")``
     and the middleware executes the corresponding script.
     """
 
-    def __init__(self, tools_dir: Path) -> None:
-        self.tools = [_build_run_tool(tools_dir)]
+    def __init__(self, tools_dirs: list[Path]) -> None:
+        self.tools = [_build_run_tool(tools_dirs)]
         logger.info(
             "custom_tool_middleware_initialized",
-            tools_dir=str(tools_dir),
+            tools_dirs=[str(d) for d in tools_dirs],
             tool_count=len(self.tools),
         )

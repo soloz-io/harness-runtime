@@ -390,6 +390,8 @@ class ExecutionManager:
         agent_definition: Optional[dict[str, Any]] = None,
         num_turns: int = 1,
         resume_payload: Optional[Any] = None,
+        workspace_id: Optional[str] = None,
+        app_id: Optional[str] = None,
     ) -> str:
         tracer = self._tracer
         span = None
@@ -401,6 +403,8 @@ class ExecutionManager:
 
         start_time = time.time()
         state = ExecutionState()
+        state.workspace_id = workspace_id or ""
+        state.app_id = app_id
 
         config: RunnableConfig = {
             "configurable": {"thread_id": session_id},
@@ -497,6 +501,8 @@ class ExecutionManager:
         agent_definition: Optional[dict[str, Any]] = None,
         num_turns: int = 1,
         resume_payload: Optional[Any] = None,
+        workspace_id: Optional[str] = None,
+        app_id: Optional[str] = None,
     ) -> str:
         tracer = self._tracer
         span = None
@@ -515,6 +521,8 @@ class ExecutionManager:
                 agent_definition=agent_definition,
                 num_turns=num_turns,
                 resume_payload=resume_payload,
+                workspace_id=workspace_id,
+                app_id=app_id,
             )
         )
 

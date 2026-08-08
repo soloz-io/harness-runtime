@@ -20,7 +20,7 @@ state.  The caller tracks which messages have been seen via
 
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import structlog
 from psycopg.types.json import Jsonb
@@ -120,6 +120,8 @@ def write_agent_output_files(
     pool: ConnectionPool,
     session_id: str,
     files: dict[str, dict[str, str]],
+    workspace_id: str = "",
+    app_id: Optional[str] = None,
 ) -> None:
     """Insert or update agent output files.
 
@@ -127,6 +129,14 @@ def write_agent_output_files(
     execution (both orchestrator and subagent files).  Callers invoke this
     alongside ``write_chat_messages`` so that files are persisted for the
     REST history path, not just SSE streaming.
+
+    ``agent_output_files.session_id`` is a **scope key**, not necessarily the
+    executing session:
+    - Builder sessions (``workspace_id == app_id``): every file is keyed by
+      the app id, so the whole app's artifacts are shared across sessions.
+    - Playground sessions: files under ``.global/`` are keyed by the app id
+      (app-wide artifacts); everything else is keyed by the session id.
+    - Otherwise: files are keyed by the session id (per-session isolation).
 
     Upsert semantics: if a row with the same (session_id, filepath) already
     exists, its content and format are updated.
@@ -151,6 +161,7 @@ def write_agent_output_files(
                     ext = Path(filepath).suffix.lower()
                     media_type = _MEDIA_TYPES.get(ext, "text/plain")
                     file_id = uuid.uuid4().hex
+                    scope_key = _file_scope_key(filepath, session_id, workspace_id, app_id)
                     cur.execute(
                         """
                         INSERT INTO agent_output_files
@@ -163,7 +174,7 @@ def write_agent_output_files(
                         """,
                         (
                             file_id,
-                            session_id,
+                            scope_key,
                             filename,
                             filepath,
                             file_info.get("content", ""),
@@ -178,3 +189,22 @@ def write_agent_output_files(
             session_id=session_id,
             file_count=len(files),
         )
+
+
+def _file_scope_key(
+    filepath: str,
+    session_id: str,
+    workspace_id: str,
+    app_id: Optional[str],
+) -> str:
+    """Return the ``agent_output_files.session_id`` scope key for a file.
+
+    See ``write_agent_output_files`` docstring for the rules.  The ``.global/``
+    path prefix is preserved in the stored ``filepath`` so app-global and
+    session-scoped rows never collide on the (session_id, filepath) key.
+    """
+    if app_id and workspace_id == app_id:
+        return app_id
+    if app_id and filepath.startswith(".global/"):
+        return app_id
+    return session_id

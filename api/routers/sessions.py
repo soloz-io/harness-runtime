@@ -171,6 +171,7 @@ async def handle_message(session_id: str, body: dict[str, Any]) -> dict[str, Any
     input_payload = body.get("input_payload", {})
     resume_payload = body.get("resume_payload")
     workspace_id = body.get("workspace_id") or os.environ.get("WORKSPACE_ID")
+    app_id = body.get("app_id")
 
     if not workspace_id:
         logger.warning(
@@ -203,6 +204,7 @@ async def handle_message(session_id: str, body: dict[str, Any]) -> dict[str, Any
                 publisher=publisher,
                 session_id=session_id,
                 workspace_id=workspace_id,
+                app_id=app_id,
             )
         except (ValueError, SkillsError) as e:
             raise HTTPException(status_code=400, detail=str(e)) from e

@@ -51,16 +51,16 @@ class StarTopologyBuilder(TopologyBuilder):
         if not nodes:
             raise ValueError("Agent definition must contain at least one node")
 
-        # Auto-construct ArtifactBackend when backend not pre-built but DB params available
+        # Auto-construct SessionArtifactBackend when backend not pre-built but DB params available
         if backend is None and workspace_id and session_id and db_pool is not None:
-            from core.backends.artifact import ArtifactBackend
+            from core.backends.artifact import SessionArtifactBackend
 
-            backend = ArtifactBackend(
+            backend = SessionArtifactBackend(
                 workspace_id=workspace_id,
                 session_id=session_id,
                 pool=db_pool,
             )
-            logger.info("artifact_backend_auto_constructed")
+            logger.info("session_artifact_backend_auto_constructed")
 
         orchestrator_config = None
         specialist_configs = []
@@ -194,11 +194,11 @@ class StarTopologyBuilder(TopologyBuilder):
             tools_ctx.node_tools.get(orchestrator_node_id) if tools_ctx else None
         )
         if orchestrator_tools_spec:
-            middleware_stack.append(CustomToolMiddleware(orchestrator_tools_spec.tools_dir))
+            middleware_stack.append(CustomToolMiddleware(orchestrator_tools_spec.search_dirs))
             logger.info(
                 "custom_tool_middleware_appended_orchestrator",
                 node_id=orchestrator_node_id,
-                tools_dir=str(orchestrator_tools_spec.tools_dir),
+                tools_dirs=[str(d) for d in orchestrator_tools_spec.search_dirs],
             )
 
         if middleware_stack:
