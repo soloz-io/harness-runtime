@@ -136,12 +136,12 @@ def shutdown_execution_manager() -> None:
         logger.info("execution_manager_shutdown")
 
 
-async def _run_turn_async(state: SessionState, user_content: str) -> None:
+async def _run_turn_async(state: SessionState, user_content: str, role: str = "user") -> None:
     session = state.session
     publisher = state.publisher
     state.task = asyncio.current_task()
     try:
-        await session.async_run_turn(user_content=user_content, publisher=publisher)
+        await session.async_run_turn(user_content=user_content, publisher=publisher, role=role)
     except asyncio.CancelledError:
         logger.info("session_run_turn_cancelled", session_id=session.session_id)
         publisher.publish_result(
@@ -172,6 +172,7 @@ async def handle_message(session_id: str, body: dict[str, Any]) -> dict[str, Any
     resume_payload = body.get("resume_payload")
     workspace_id = body.get("workspace_id") or os.environ.get("WORKSPACE_ID")
     app_id = body.get("app_id")
+    role = body.get("role", "user")
 
     if not workspace_id:
         logger.warning(
@@ -182,6 +183,42 @@ async def handle_message(session_id: str, body: dict[str, Any]) -> dict[str, Any
             status_code=400,
             detail="workspace_id is required (set in POST body or WORKSPACE_ID env var)",
         )
+
+    # System messages are written directly to chat_messages — skip agent processing
+    if role == "system" and message:
+        import json as _json
+
+        from core.message_writer import write_chat_messages
+
+        # Try to parse message as JSON for structured content (e.g., audio URL)
+        try:
+            content = _json.loads(message)
+        except (_json.JSONDecodeError, TypeError):
+            content = message
+
+        system_msg = {"type": "system", "content": content}
+        pool = getattr(_get_execution_manager(), "_pool", None)
+        if pool is not None:
+            write_chat_messages(pool, session_id, [system_msg], offset=0, source="notification")
+            logger.info(
+                "system_message_written",
+                session_id=session_id,
+                source="notification",
+                content_preview=str(content)[:120],
+            )
+        else:
+            logger.warning("system_message_no_pool", session_id=session_id)
+
+        # Publish a values event so the frontend picks up the new message via SSE
+        session_store = _get_session_store()
+        if session_id in session_store:
+            publisher = session_store[session_id].publisher
+            publisher.publish_values(
+                session_id=session_id,
+                messages=[{"type": "system", "content": content}],
+                files=None,
+            )
+        return {"success": True}
 
     session_store = _get_session_store()
     execution_manager = _get_execution_manager()
@@ -215,7 +252,7 @@ async def handle_message(session_id: str, body: dict[str, Any]) -> dict[str, Any
         logger.info("session_initialized", session_id=session_id)
 
     if message or resume_payload:
-        state.task = asyncio.create_task(_run_turn_async(state, message))
+        state.task = asyncio.create_task(_run_turn_async(state, message, role))
 
     return {"success": True}
 

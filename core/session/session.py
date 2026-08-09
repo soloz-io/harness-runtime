@@ -92,12 +92,12 @@ class Session:
         self.resume_payload = resume_payload
 
     async def async_run_turn(
-        self, user_content: str = "", publisher: Optional[EventPublisher] = None
+        self, user_content: str = "", publisher: Optional[EventPublisher] = None, role: str = "user"
     ) -> str:
         self._ensure_initialized()
         self.turns += 1
 
-        payload = prepare_turn_input(self.base_payload, user_content)
+        payload = prepare_turn_input(self.base_payload, user_content, role)
         graph = self._build_graph()
         resume = consume_resume(self)
 
@@ -115,11 +115,11 @@ class Session:
         )
         return result
 
-    def run_turn(self, user_content: str = "") -> str:
+    def run_turn(self, user_content: str = "", role: str = "user") -> str:
         self._ensure_initialized()
         self.turns += 1
 
-        payload = prepare_turn_input(self.base_payload, user_content)
+        payload = prepare_turn_input(self.base_payload, user_content, role)
         graph = self._build_graph()
         resume = consume_resume(self)
 

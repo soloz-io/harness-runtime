@@ -410,6 +410,10 @@ class ExecutionManager:
             "configurable": {"thread_id": session_id},
             "recursion_limit": RECURSION_LIMIT,
         }
+        if workspace_id:
+            config["configurable"]["workspace_id"] = workspace_id
+        if app_id:
+            config["configurable"]["app_id"] = app_id
         if self._async_checkpointer:
             config["configurable"]["checkpointer"] = self._async_checkpointer
 

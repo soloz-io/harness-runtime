@@ -11,7 +11,7 @@ from core.event_publisher import EventPublisher
 from core.execution_state import ExecutionState
 from core.executor_helpers import serialize_messages_for_values
 from core.handlers import EventHandler
-from core.message_writer import write_chat_messages
+from core.message_writer import write_agent_output_files, write_chat_messages
 from core.types import Event
 
 
@@ -47,6 +47,14 @@ class SubagentValuesHandler(EventHandler):
                 messages=[],
                 files=state_files,
             )
+            if self._pool is not None:
+                write_agent_output_files(
+                    self._pool,
+                    session_id,
+                    state_files,
+                    workspace_id=state.workspace_id,
+                    app_id=state.app_id,
+                )
 
         # ---- Messages ----
         msgs = data.get("messages", [])

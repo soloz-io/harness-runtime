@@ -9,6 +9,7 @@ returns a structured result.  The agent never sees filesystem paths or manages
 dependencies — only the tool name and CLI flags.
 """
 
+import os
 import shlex
 import subprocess
 import sys
@@ -20,6 +21,30 @@ from langchain.agents.middleware import AgentMiddleware
 from langchain_core.tools import tool as lc_tool
 
 logger = structlog.get_logger(__name__)
+
+
+def _scope_env() -> dict[str, str]:
+    """Read session scope ids from the active graph config for the subprocess env.
+
+    ``run_tool`` executes inside the graph, so ``get_config()`` exposes the
+    ``configurable`` keys set by the executor (``workspace_id``, ``app_id``).
+    The CLI subprocess inherits these so its DB reads can resolve the correct
+    ``agent_output_files`` scope key.  Falls back to ``os.environ`` when not
+    running inside a graph context.
+    """
+    extra: dict[str, str] = {}
+    try:
+        from langgraph.config import get_config
+
+        config = get_config()
+    except RuntimeError:
+        config = None
+    configurable = (config or {}).get("configurable") or {}
+    for key in ("WORKSPACE_ID", "APP_ID", "SESSION_ID"):
+        value = configurable.get(key.lower())
+        if value is not None:
+            extra[key] = str(value)
+    return extra
 
 
 def _build_run_tool(tools_dirs: list[Path]):
@@ -95,10 +120,14 @@ def _build_run_tool(tools_dirs: list[Path]):
                 text=True,
                 timeout=timeout,
                 cwd=str(script_dir),
+                env={**os.environ, **_scope_env()},
             )
+            out = (result.stdout or "").strip()
+            err = (result.stderr or "").strip()
+            combined = f"{out}\n{err}".strip() if out and err else (out or err or "")
             return {
                 "success": result.returncode == 0,
-                "output": result.stdout if result.returncode == 0 else result.stderr,
+                "output": combined,
                 "exit_code": result.returncode,
             }
         except subprocess.TimeoutExpired:

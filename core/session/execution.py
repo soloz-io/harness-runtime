@@ -4,7 +4,9 @@ from core.factory import build_agent_from_definition
 from core.tool_registry import ToolRegistry
 
 
-def prepare_turn_input(base_payload: dict[str, Any], user_content: str) -> dict[str, Any]:
+def prepare_turn_input(
+    base_payload: dict[str, Any], user_content: str, role: str = "user"
+) -> dict[str, Any]:
     """Return a shallow copy of ``base_payload`` with ``user_content`` appended as a message.
 
     This is a pure function — no side effects.
@@ -12,7 +14,7 @@ def prepare_turn_input(base_payload: dict[str, Any], user_content: str) -> dict[
     payload = dict(base_payload)
     messages = list(payload.get("messages", []))
     if user_content:
-        messages.append({"role": "user", "content": user_content})
+        messages.append({"role": role, "content": user_content})
     payload["messages"] = messages
     return payload
 
