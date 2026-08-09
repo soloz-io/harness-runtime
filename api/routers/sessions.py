@@ -1,6 +1,7 @@
 """Session management endpoints — uses ``RuntimeServices`` singleton for DI."""
 
 import asyncio
+import json as _json
 import os
 import time
 import traceback
@@ -19,6 +20,25 @@ from core.session import Session
 from core.session.skills import SkillsError
 
 logger = structlog.get_logger(__name__)
+
+_SYSTEM_NOTICE_PREFIX = "[System Notification]"
+
+
+def _notification_text(raw: str) -> str:
+    """Extract human-readable text from a JSON notification payload.
+
+    Returns the ``message`` field if present, then ``title``, otherwise the
+    raw string itself.  Parsing errors are handled gracefully by returning the
+    raw input.
+    """
+    try:
+        payload = _json.loads(raw)
+    except (TypeError, ValueError, _json.JSONDecodeError):
+        return raw
+    if isinstance(payload, dict):
+        return payload.get("message") or payload.get("title") or raw
+    return raw
+
 
 router = APIRouter(tags=["sessions"])
 
@@ -184,19 +204,12 @@ async def handle_message(session_id: str, body: dict[str, Any]) -> dict[str, Any
             detail="workspace_id is required (set in POST body or WORKSPACE_ID env var)",
         )
 
-    # System messages are written directly to chat_messages — skip agent processing
+    # System messages: write the notification row (for the audio-player UI),
+    # then fall through to a user-role graph turn so the agent is informed.
     if role == "system" and message:
-        import json as _json
-
         from core.message_writer import write_chat_messages
 
-        # Try to parse message as JSON for structured content (e.g., audio URL)
-        try:
-            content = _json.loads(message)
-        except (_json.JSONDecodeError, TypeError):
-            content = message
-
-        system_msg = {"type": "system", "content": content}
+        system_msg = {"type": "system", "content": message}
         pool = getattr(_get_execution_manager(), "_pool", None)
         if pool is not None:
             write_chat_messages(pool, session_id, [system_msg], offset=0, source="notification")
@@ -204,21 +217,28 @@ async def handle_message(session_id: str, body: dict[str, Any]) -> dict[str, Any
                 "system_message_written",
                 session_id=session_id,
                 source="notification",
-                content_preview=str(content)[:120],
+                content_preview=str(message)[:120],
             )
         else:
             logger.warning("system_message_no_pool", session_id=session_id)
 
-        # Publish a values event so the frontend picks up the new message via SSE
         session_store = _get_session_store()
         if session_id in session_store:
-            publisher = session_store[session_id].publisher
-            publisher.publish_values(
+            fresh_publisher = SSEEventPublisher(session_id)
+            fresh_publisher.publish_values(
                 session_id=session_id,
-                messages=[{"type": "system", "content": content}],
+                messages=[{"type": "system", "content": message}],
                 files=None,
             )
-        return {"success": True}
+
+        # Feed the agent a user-role message so it knows the job completed.
+        # Only if the session is still live; otherwise just return.
+        notice_text = _notification_text(message)
+        if notice_text and session_id in _get_session_store():
+            message = f"{_SYSTEM_NOTICE_PREFIX} {notice_text}"
+            role = "user"
+        else:
+            return {"success": True}
 
     session_store = _get_session_store()
     execution_manager = _get_execution_manager()
@@ -317,10 +337,21 @@ async def stream_events(
 
                 for _stream_name, entries in result:
                     for entry_id, fields in entries:
-                        data_raw = fields.get(b"data", b"")
+                        if isinstance(fields, dict):
+                            fields_map: dict[bytes, bytes] = fields
+                        else:
+                            fields_map = {
+                                fields[i]: fields[i + 1] for i in range(0, len(fields), 2)
+                            }
+                        data_raw = fields_map.get(b"data", b"")
+                        entry_id_str = (
+                            entry_id.decode("utf-8")
+                            if isinstance(entry_id, bytes)
+                            else str(entry_id)
+                        )
                         if data_raw == _SENTINEL:
-                            logger.info("event_stream_sentinel_received", session_id=resolved_id)
-                            return
+                            last_id = entry_id_str
+                            continue
                         data_str = data_raw.decode("utf-8")
                         import json
 
@@ -345,11 +376,6 @@ async def stream_events(
                                 error=str(e),
                                 data_preview=data_str[:200],
                             )
-                        entry_id_str = (
-                            entry_id.decode("utf-8")
-                            if isinstance(entry_id, bytes)
-                            else str(entry_id)
-                        )
                         yield {"event": "message", "data": data_str, "id": entry_id_str}
                         last_id = entry_id_str
         except asyncio.CancelledError:
