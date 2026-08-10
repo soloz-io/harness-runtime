@@ -10,7 +10,7 @@ from core.interfaces import TopologyBuilder
 from core.tool_loader import load_tools_from_definition
 from core.tool_registry import ToolRegistry
 from core.topology.acrylic_topology import AcrylicTopologyBuilder
-from core.topology.hybrid_topology import HybridTopologyBuilder
+from core.topology.composite_topology import CompositeTopologyBuilder
 from core.topology.star_topology import StarTopologyBuilder
 
 
@@ -43,12 +43,12 @@ def build_agent_from_definition(
     # 2. Determine topology
     topology = definition.get("topology", "")
 
-    # Hybrid: one orchestrator over a mix of declarative subagents, nested
+    # Composite: one orchestrator over a mix of declarative subagents, nested
     # deep agents, and nested acrylic subgraphs. Kept separate from the
     # star/acrylic selection below.
-    if topology == "hybrid":
-        builder = HybridTopologyBuilder()
-        hybrid_build_kwargs: dict[str, Any] = {
+    if topology == "composite":
+        builder = CompositeTopologyBuilder()
+        composite_build_kwargs: dict[str, Any] = {
             "workspace_id": workspace_id,
             "session_id": session_id,
             "db_pool": db_pool,
@@ -61,7 +61,7 @@ def build_agent_from_definition(
             definition,
             available_tools,
             checkpointer,
-            **hybrid_build_kwargs,
+            **composite_build_kwargs,
         )
 
     is_acrylic = False

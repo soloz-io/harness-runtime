@@ -217,12 +217,26 @@ class ExecutionManager:
                         channel_values = checkpoint.get("channel_values", {})
                         msgs: Any = channel_values.get("messages", [])
                         if isinstance(msgs, list):
+                            completed_tool_call_ids: set[str] = set()
+                            for msg in msgs:
+                                tid = getattr(msg, "tool_call_id", None) or (
+                                    msg.get("tool_call_id") if isinstance(msg, dict) else None
+                                )
+                                msg_type = getattr(msg, "type", None) or (
+                                    msg.get("type") if isinstance(msg, dict) else None
+                                )
+                                if (
+                                    msg_type in ("tool", "ToolMessage")
+                                    or msg.__class__.__name__ == "ToolMessage"
+                                ) and tid:
+                                    completed_tool_call_ids.add(tid)
+
                             for msg in msgs:
                                 tcs = getattr(msg, "tool_calls", None)
                                 if tcs and isinstance(tcs, list):
                                     for tc in tcs:
                                         tid = tc.get("id") or tc.get("tool_call_id") or ""
-                                        if tid:
+                                        if tid and tid not in completed_tool_call_ids:
                                             tool_call_ids.append(tid)
             except Exception as e:
                 logger.warning("resume_checkpoint_load_failed", error=str(e))
@@ -238,12 +252,12 @@ class ExecutionManager:
             if i >= len(tool_call_ids):
                 break
             dt = decision.get("type", "")
-            if dt in ("respond", "reject"):
+            if dt in ("respond", "reject", "approve", "edit"):
                 tool_messages.append(
                     ToolMessage(
                         tool_call_id=tool_call_ids[i],
-                        content=decision.get("message", ""),
-                        status="success" if dt == "respond" else "error",
+                        content=decision.get("message", "Approved"),
+                        status="error" if dt == "reject" else "success",
                     )
                 )
 

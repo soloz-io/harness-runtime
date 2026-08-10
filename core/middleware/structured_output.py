@@ -49,6 +49,96 @@ def _patched_convert_message_to_dict(
 _lc_openai_base._convert_message_to_dict = _patched_convert_message_to_dict  # type: ignore
 logger.debug("monkey_patched_convert_message_to_dict_for_reasoning_content")
 
+_original_get_request_payload = _lc_openai_base.ChatOpenAI._get_request_payload
+
+
+def sanitize_openai_messages(messages_dicts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Bidirectional sanitizer for OpenAI message arrays."""
+    open_ids: set[str] = set()
+    sanitized: list[dict[str, Any]] = []
+
+    for msg in messages_dicts:
+        if not isinstance(msg, dict):
+            sanitized.append(msg)
+            continue
+
+        role = msg.get("role")
+
+        if role == "assistant":
+            # Close previous open_ids by injecting synthetic responses before this assistant turn
+            for tc_id in list(open_ids):
+                sanitized.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc_id,
+                        "content": "Action completed or interrupted",
+                    }
+                )
+            open_ids = set()
+
+            sanitized.append(msg)
+
+            # Register new open tool_call_ids from this assistant message
+            for tc in msg.get("tool_calls") or []:
+                tc_id = (
+                    (tc.get("id") or tc.get("tool_call_id"))
+                    if isinstance(tc, dict)
+                    else (getattr(tc, "id", None) or getattr(tc, "tool_call_id", None))
+                )
+                if tc_id:
+                    open_ids.add(tc_id)
+
+        elif role == "tool":
+            tc_id = msg.get("tool_call_id") or msg.get("id")
+            if tc_id and tc_id in open_ids:
+                # Valid tool response for active open tool_call — append and mark as closed
+                sanitized.append(msg)
+                open_ids.discard(tc_id)
+            else:
+                # Orphaned tool message — drop it to prevent API error
+                logger.warning(
+                    "sanitize_openai_messages: dropping orphaned tool message",
+                    tool_call_id=tc_id,
+                )
+
+        else:
+            # Non-tool, non-assistant message: close any still-open tool_calls first
+            for tc_id in list(open_ids):
+                sanitized.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tc_id,
+                        "content": "Action completed or interrupted",
+                    }
+                )
+            open_ids = set()
+            sanitized.append(msg)
+
+    # Flush any remaining open_ids at end of message list
+    for tc_id in list(open_ids):
+        sanitized.append(
+            {
+                "role": "tool",
+                "tool_call_id": tc_id,
+                "content": "Action completed or interrupted",
+            }
+        )
+
+    return sanitized
+
+
+def _patched_get_request_payload(
+    self: Any, input_: Any, *, stop: Any = None, **kwargs: Any
+) -> dict:
+    payload = _original_get_request_payload(self, input_, stop=stop, **kwargs)
+    if "messages" in payload and isinstance(payload["messages"], list):
+        payload["messages"] = sanitize_openai_messages(payload["messages"])
+    return payload
+
+
+_lc_openai_base.ChatOpenAI._get_request_payload = _patched_get_request_payload  # type: ignore
+logger.debug("monkey_patched_get_request_payload_for_tool_call_sanitization")
+
 
 class StructuredOutputMappingMiddleware(AgentMiddleware[Any, Any, Any]):
     """Spreads structured_response fields into typed state fields after model execution.

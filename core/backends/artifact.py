@@ -125,15 +125,9 @@ class SessionArtifactBackend(StateBackend):
     # ------------------------------------------------------------------
 
     def _scope_condition(self) -> tuple[LiteralString, list[Any]]:
-        """WHERE condition covering the session workspace + app globals.
-
-        Session workspace: rows keyed by ``workspace_id`` (excluding the
-        current session's channel files, which StateBackend already serves)
-        and never the ``.global/`` namespace.  App globals: rows keyed by
-        ``app_id`` under the ``.global/`` prefix.
-        """
-        clauses = ["(session_id = %s AND session_id != %s AND filepath NOT LIKE '.global/%%')"]
-        params: list[Any] = [self.workspace_id, self.session_id]
+        """WHERE condition covering the session workspace + app globals."""
+        clauses = ["(session_id IN (%s, %s) AND filepath NOT LIKE '.global/%%')"]
+        params: list[Any] = [self.session_id, self.workspace_id]
         if self.app_id:
             clauses.append("(session_id = %s AND filepath LIKE '.global/%%')")
             params.append(self.app_id)
@@ -164,14 +158,13 @@ class SessionArtifactBackend(StateBackend):
                             """
                             SELECT aof.content
                             FROM agent_output_files aof
-                            WHERE aof.session_id = %s
-                              AND aof.session_id != %s
+                            WHERE aof.session_id IN (%s, %s)
                               AND aof.filepath = %s
                               AND aof.filepath NOT LIKE '.global/%%'
                             ORDER BY aof.created_at DESC
                             LIMIT 1
                             """,
-                            (self.workspace_id, self.session_id, db_path),
+                            (self.session_id, self.workspace_id, db_path),
                         )
                     return cur.fetchone()
         except Exception:

@@ -232,9 +232,9 @@ async def handle_message(session_id: str, body: dict[str, Any]) -> dict[str, Any
             )
 
         # Feed the agent a user-role message so it knows the job completed.
-        # Only if the session is still live; otherwise just return.
+        # Fall through to initialize session state if needed and execute turn.
         notice_text = _notification_text(message)
-        if notice_text and session_id in _get_session_store():
+        if notice_text:
             message = f"{_SYSTEM_NOTICE_PREFIX} {notice_text}"
             role = "user"
         else:

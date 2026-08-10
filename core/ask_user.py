@@ -1,7 +1,7 @@
 """
 Ask User Tool — built-in HITL tool for relaying questions to the user.
 
-Registered on the `HumanInteractionMiddleware` alongside `review_content`.
+Registered on the `HumanInteractionMiddleware`.
 The tool body is never executed — it is intercepted by
 `HumanInTheLoopMiddleware` via `interrupt_on`. The human's response is
 injected as the tool result via the `respond` decision.
