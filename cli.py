@@ -94,7 +94,19 @@ def _start_redis() -> None:
     redis_port = os.getenv("REDIS_PORT", "6379")
     try:
         subprocess.run(
-            ["redis-server", "--daemonize", "yes", "--port", redis_port],
+            [
+                "redis-server",
+                "--daemonize",
+                "yes",
+                "--port",
+                redis_port,
+                "--save",
+                "",
+                "--stop-writes-on-bgsave-error",
+                "no",
+                "--dir",
+                "/tmp",
+            ],
             check=True,
             capture_output=True,
         )
