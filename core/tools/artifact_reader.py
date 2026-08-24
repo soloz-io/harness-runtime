@@ -100,7 +100,7 @@ def read_artifact_from_db(
                 with conn.cursor() as cur:
                     cur.execute(
                         """
-                        SELECT content FROM agent_output_files
+                        SELECT COALESCE(NULLIF(BTRIM(content), ''), url) FROM agent_output_files
                         WHERE session_id = %s AND filepath = %s
                         ORDER BY created_at DESC
                         LIMIT 1
