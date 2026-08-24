@@ -212,3 +212,43 @@ def test_run_tool_prefers_node_dir_over_shared(
     result = run_tool.invoke({"tool_name": "seg_cli", "cli_args": ""})
     assert result["success"] is True
     assert "node-seg" in result["output"]
+
+
+def test_tools_manager_discovers_nested_subagent_tools(
+    monkeypatch: pytest.MonkeyPatch, image_tools_dir: Path
+) -> None:
+    monkeypatch.setenv(ENV_IMAGE_DIR, str(image_tools_dir))
+
+    nested_def = {
+        "name": "test-nested-tools",
+        "topology": "composite",
+        "nodes": [
+            {
+                "id": "orchestrator",
+                "type": "Orchestrator",
+                "config": {"name": "orchestrator"},
+            },
+            {
+                "id": "media-generator",
+                "type": "Specialist",
+                "config": {
+                    "name": "media-generator-agent",
+                    "runtime": "deepagent",
+                    "subagents": [
+                        {
+                            "name": "motion-graphics",
+                            "tools": ["read_file", "run_tool"],
+                        }
+                    ],
+                },
+            },
+        ],
+    }
+
+    manager = ToolsManager(nested_def)
+    ctx = manager.initialize()
+
+    assert "motion-graphics" in ctx.node_tools
+    assert ctx.node_tools["motion-graphics"].tools_dir == (
+        image_tools_dir / "motion-graphics" / "tools"
+    )

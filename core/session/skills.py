@@ -90,8 +90,12 @@ class SkillsManager:
     def _collect_skills(self) -> list[str]:
         skills: list[str] = []
         for node in self._agent_definition.get("nodes", []):
-            node_skills = node.get("config", {}).get("skills", [])
+            config = node.get("config", {})
+            node_skills = config.get("skills", [])
             skills.extend(node_skills)
+            for sub in config.get("subagents", []):
+                if isinstance(sub, dict):
+                    skills.extend(sub.get("skills", []))
         return skills
 
     def _resolve_agents_dir(self) -> Path:
@@ -109,32 +113,46 @@ class SkillsManager:
         return path
 
     def _isolate_skills(self, agents_path: Path) -> dict[str, Path]:
-        """Copy each node's skills from ``agents/<node-id>/skills/``.
+        """Copy each node's and subagent's skills from ``agents/<id>/skills/``.
 
-        Only nodes that declare skills in the agent definition are considered;
-        their skill directories are isolated into per-skill temp directories.
+        Only nodes and subagents that declare skills in the agent definition
+        are considered; their skill directories are isolated into per-skill temp
+        directories.
         """
         tmp_dirs: dict[str, Path] = {}
+        agents_to_check: list[tuple[str, list[str]]] = []
+
         for node in self._agent_definition.get("nodes", []):
             node_id = node.get("id", "")
-            node_skills = node.get("config", {}).get("skills", [])
-            if not node_skills:
-                continue
-            agent_skills_dir = agents_path / node_id / "skills"
+            config = node.get("config", {})
+            node_skills = config.get("skills", [])
+            if node_id and node_skills:
+                agents_to_check.append((node_id, node_skills))
+            for sub in config.get("subagents", []):
+                if isinstance(sub, dict):
+                    sub_id = sub.get("name") or sub.get("id", "")
+                    sub_skills = sub.get("skills", [])
+                    if sub_id and sub_skills:
+                        agents_to_check.append((sub_id, sub_skills))
+
+        for agent_id, _ in agents_to_check:
+            agent_skills_dir = agents_path / agent_id / "skills"
             if not agent_skills_dir.is_dir():
                 logger.warning(
-                    "agent_skills_dir_missing", node_id=node_id, path=str(agent_skills_dir)
+                    "agent_skills_dir_missing", node_id=agent_id, path=str(agent_skills_dir)
                 )
                 continue
             for skill_dir in agent_skills_dir.iterdir():
                 if not skill_dir.is_dir():
                     continue
                 skill_name = skill_dir.name
+                if skill_name in tmp_dirs:
+                    continue
                 tmp = Path(tempfile.mkdtemp(prefix=f"skill-{skill_name}-"))
                 dest = tmp / skill_name
                 shutil.copytree(str(skill_dir), str(dest))
                 tmp_dirs[skill_name] = tmp
-                logger.info("skill_isolated", skill=skill_name, node=node_id)
+                logger.info("skill_isolated", skill=skill_name, node=agent_id)
         return tmp_dirs
 
     def _build_filesystem_routes(self) -> dict[str, Any]:

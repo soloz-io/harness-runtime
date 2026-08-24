@@ -297,11 +297,17 @@ class CompositeTopologyBuilder(TopologyBuilder):
         # Build nested subagent specs (if any)
         nested_subagent_specs: List[Any] = []
         for spec in specialist_config.get("subagents", []):
+            sub_name = spec.get("name", "")
+            sub_id = spec.get("id", "")
+            tools_spec = None
+            if tools_ctx:
+                tools_spec = tools_ctx.node_tools.get(sub_name) or tools_ctx.node_tools.get(sub_id)
             nested_subagent_specs.append(
                 build_subagent(
                     spec,
                     available_tools,
                     skills=spec.get("skills"),
+                    tools_spec=tools_spec,
                 )
             )
 

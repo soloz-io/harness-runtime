@@ -33,9 +33,14 @@ def normalize_agent_definition(agent_definition: dict[str, Any]) -> dict[str, An
         if not isinstance(config, dict):
             continue
         skills = config.get("skills")
-        if not isinstance(skills, list):
-            continue
-        config["skills"] = [normalize_skill_path(s) for s in skills]
+        if isinstance(skills, list):
+            config["skills"] = [normalize_skill_path(s) for s in skills]
+
+        for sub in config.get("subagents", []):
+            if isinstance(sub, dict):
+                sub_skills = sub.get("skills")
+                if isinstance(sub_skills, list):
+                    sub["skills"] = [normalize_skill_path(s) for s in sub_skills]
 
     return normalized
 

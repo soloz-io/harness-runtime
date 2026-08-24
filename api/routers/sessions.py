@@ -184,12 +184,67 @@ async def _run_turn_async(state: SessionState, user_content: str, role: str = "u
         publisher.close()
 
 
+@router.get("/checkpoints")
+async def list_checkpoints(session_id: str) -> dict[str, Any]:
+    """List all LangGraph checkpoints for a session (thread)."""
+    execution_manager = _get_execution_manager()
+    checkpointer = execution_manager._async_checkpointer or execution_manager.checkpointer
+    if checkpointer is None:
+        return {"checkpoints": []}
+
+    config = {"configurable": {"thread_id": session_id}}
+    history: list[dict[str, Any]] = []
+
+    try:
+        if hasattr(checkpointer, "alist"):
+            async for snapshot in checkpointer.alist(config):
+                cfg = getattr(snapshot, "config", {}) or {}
+                meta = getattr(snapshot, "metadata", {}) or {}
+                created_at = getattr(snapshot, "created_at", None)
+                if hasattr(created_at, "isoformat"):
+                    created_at = created_at.isoformat()
+                history.append(
+                    {
+                        "checkpoint_id": cfg.get("configurable", {}).get("checkpoint_id", ""),
+                        "step": meta.get("step", -1),
+                        "source": meta.get("source", ""),
+                        "writes": list((meta.get("writes") or {}).keys())
+                        if isinstance(meta.get("writes"), dict)
+                        else [],
+                        "created_at": created_at,
+                    }
+                )
+        elif hasattr(checkpointer, "list"):
+            for snapshot in checkpointer.list(config):
+                cfg = getattr(snapshot, "config", {}) or {}
+                meta = getattr(snapshot, "metadata", {}) or {}
+                created_at = getattr(snapshot, "created_at", None)
+                if hasattr(created_at, "isoformat"):
+                    created_at = created_at.isoformat()
+                history.append(
+                    {
+                        "checkpoint_id": cfg.get("configurable", {}).get("checkpoint_id", ""),
+                        "step": meta.get("step", -1),
+                        "source": meta.get("source", ""),
+                        "writes": list((meta.get("writes") or {}).keys())
+                        if isinstance(meta.get("writes"), dict)
+                        else [],
+                        "created_at": created_at,
+                    }
+                )
+    except Exception as e:
+        logger.warning("list_checkpoints_failed", session_id=session_id, error=str(e))
+
+    return {"checkpoints": history}
+
+
 @router.post("/session/{session_id}/message")
 async def handle_message(session_id: str, body: dict[str, Any]) -> dict[str, Any]:
     message = body.get("message", "")
     agent_definition = body.get("agent_definition")
     input_payload = body.get("input_payload", {})
     resume_payload = body.get("resume_payload")
+    restore_checkpoint_id = body.get("restore_checkpoint_id")
     workspace_id = body.get("workspace_id") or os.environ.get("WORKSPACE_ID")
     app_id = body.get("app_id")
     role = body.get("role", "user")
@@ -203,6 +258,22 @@ async def handle_message(session_id: str, body: dict[str, Any]) -> dict[str, Any
             status_code=400,
             detail="workspace_id is required (set in POST body or WORKSPACE_ID env var)",
         )
+
+    session_store = _get_session_store()
+    execution_manager = _get_execution_manager()
+
+    if restore_checkpoint_id:
+        from core.checkpoint_restore import apply_checkpoint_restore
+
+        checkpointer = execution_manager._async_checkpointer or execution_manager.checkpointer
+        try:
+            await apply_checkpoint_restore(checkpointer, session_id, restore_checkpoint_id)
+        except Exception as e:
+            logger.error("checkpoint_restore_failed", session_id=session_id, error=str(e))
+            raise HTTPException(status_code=400, detail=str(e)) from e
+
+        # Invalidate in-memory session so next turn starts fresh from restored checkpoint
+        session_store.pop(session_id, None)
 
     # System messages: write the notification row (for the audio-player UI),
     # then fall through to a user-role graph turn so the agent is informed.
@@ -239,9 +310,6 @@ async def handle_message(session_id: str, body: dict[str, Any]) -> dict[str, Any
             role = "user"
         else:
             return {"success": True}
-
-    session_store = _get_session_store()
-    execution_manager = _get_execution_manager()
 
     if session_id in session_store:
         state = session_store[session_id]

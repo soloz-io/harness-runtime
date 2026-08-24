@@ -270,3 +270,50 @@ def test_session_passes_normalized_definition_to_skills_manager(env_setup: None)
         assert session._skills_mgr._agent_definition is session.agent_definition
     finally:
         session.cleanup()
+
+
+def test_skills_manager_discovers_nested_subagent_skills(
+    monkeypatch: pytest.MonkeyPatch, image_skills_dir: Path, runtime_base: Path
+) -> None:
+    """SkillsManager must discover and isolate skills declared under config.subagents."""
+    monkeypatch.setenv(ENV_IMAGE_DIR, str(image_skills_dir))
+    monkeypatch.setenv(ENV_SKILLS_RUNTIME_BASE, str(runtime_base))
+
+    nested_def = {
+        "name": "test-nested-agents",
+        "topology": "composite",
+        "nodes": [
+            {
+                "id": "orchestrator",
+                "type": "Orchestrator",
+                "config": {"name": "orchestrator", "skills": []},
+            },
+            {
+                "id": "media-generator",
+                "type": "Specialist",
+                "config": {
+                    "name": "media-generator-agent",
+                    "runtime": "deepagent",
+                    "subagents": [
+                        {
+                            "name": "specialist",
+                            "skills": ["/workspace/.oranger/skills/chronixel-video/"],
+                        }
+                    ],
+                },
+            },
+        ],
+    }
+
+    normalized = normalize_agent_definition(nested_def)
+    assert normalized["nodes"][1]["config"]["subagents"][0]["skills"] == [
+        f"{RUNTIME_SKILLS_BASE}/chronixel-video/"
+    ]
+
+    manager = SkillsManager(normalized, _FakeArtifactBackend())
+    try:
+        ctx = manager.initialize()
+        assert f"{runtime_base}/skills/chronixel-video/" in ctx.composite_backend.routes
+        assert "/workspace/.builder/agent/specialist/" in ctx.composite_backend.routes
+    finally:
+        manager.cleanup()

@@ -106,16 +106,32 @@ class ToolsManager:
             shared_dir = None
 
         node_tools: dict[str, ToolSpec] = {}
+        agent_ids: set[str] = set()
+
         for node in self._agent_definition.get("nodes", []):
             node_id = node.get("id", "")
-            if not node_id:
-                continue
-            own_dir = image_dir / node_id / TOOLS_SUBDIR
+            if node_id:
+                agent_ids.add(node_id)
+            config = node.get("config", {})
+            name = config.get("name", "")
+            if name:
+                agent_ids.add(name)
+            for sub in config.get("subagents", []):
+                if isinstance(sub, dict):
+                    sub_name = sub.get("name", "")
+                    if sub_name:
+                        agent_ids.add(sub_name)
+                    sub_id = sub.get("id", "")
+                    if sub_id:
+                        agent_ids.add(sub_id)
+
+        for agent_id in agent_ids:
+            own_dir = image_dir / agent_id / TOOLS_SUBDIR
             own = own_dir if own_dir.is_dir() else None
             if own is None and shared_dir is None:
                 continue
-            node_tools[node_id] = ToolSpec(node_id=node_id, tools_dir=own, shared_dir=shared_dir)
-            logger.info("tools_discovered", node_id=node_id, path=str(own or shared_dir))
+            node_tools[agent_id] = ToolSpec(node_id=agent_id, tools_dir=own, shared_dir=shared_dir)
+            logger.info("tools_discovered", node_id=agent_id, path=str(own or shared_dir))
 
         if not node_tools:
             logger.info("no_nodes_with_tools")

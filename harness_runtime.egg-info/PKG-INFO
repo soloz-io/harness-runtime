@@ -39,110 +39,26 @@ Requires-Dist: opentelemetry-instrumentation-asyncio>=0.50b0; extra == "otel"
 
 # harness-runtime
 
-LangGraph agent execution engine designed for the **stdio subprocess pattern** — spawned as a child process by the Waypoint SDK, communicating via NDJSON over stdin/stdout using the **LiteLLM frame protocol**.
+Harness runtime expects multi-agents DAG in defined interface.
 
-## Overview
-
-```
-Waypoint SDK → spawn → harness-runtime → stdin NDJSON → turn frames → stdout NDJSON → exit
-```
-
-- **Execution**: LangGraph DAG execution with PostgreSQL checkpointing
-- **Protocol**: LiteLLM-compatible NDJSON frame protocol over stdio
-- **Persistence**: LangGraph `PostgresSaver` for multi-turn conversations
-- **No network, no K8s, no Redis**: Runs as a local subprocess
-
-## Quick Start
-
-```bash
-# Install
-pip install .
-
-# Run (expects NDJSON on stdin)
-DATABASE_URL=postgresql://user:pass@localhost:5432/db harness-runtime
-```
-
-### Example NDJSON session
-
-```bash
-echo '{"type":"control_request","request_id":"req_1","request":{"subtype":"initialize","agent_definition":{...},"input_payload":{"messages":[]}}}' | \
-DATABASE_URL=postgresql://user:pass@localhost:5432/db harness-runtime
-```
-
-## Protocol
-
-See [ADR-003](../waypoint/docs/adr/003-harness-runtime-as-stdio-subprocess.md) for the full protocol specification.
-
-### Frame Types (SDK → Server)
-
-| Type | Purpose |
-|------|---------|
-| `control_request {initialize}` | Build LangGraph, init PostgresSaver |
-| `control_request {interrupt}` | Cancel in-flight turn |
-| `user {message}` | Each turn — runs graph with the input |
-
-### Frame Types (Server → SDK)
-
-| Type | Purpose |
-|------|---------|
-| `control_response {success}` | Ack for initialize/interrupt |
-| `system {init}` | Start of turn — model, tools |
-| `assistant {content}` | Complete assistant message with `text` / `tool_use` blocks |
-| `user {content}` | Echo of internal tool results (`tool_result` blocks) |
-| `stream_event {content_block_delta}` | Streaming LLM token deltas |
-| `result` | **Terminates the turn** — `success`, `error_max_turns`, or `error_during_execution` |
-
-## Architecture
-
-```
-harness-runtime/
-├── cli.py                      # CLI entry point — stdin NDJSON loop
-├── core/
-│   ├── builder.py              # GraphBuilder — builds LangGraph DAG
-│   ├── event_publisher.py      # StdioPublisher — LiteLLM frame emitter
-│   ├── executor.py             # ExecutionManager — runs graph, maps events → frames
-│   ├── session.py              # Session — multi-turn lifecycle
-│   ├── model_factory.py        # LLM model creation
-│   ├── model_identifier.py     # "provider:model" string builder
-│   ├── subagent_builder.py     # Specialist agent compilation
-│   ├── tool_loader.py          # Dynamic tool loading from script defs
-│   └── state_schema_builder.py # Dynamic AgentState subclass creation
-├── models/
-│   ├── __init__.py
-│   └── frames.py               # LiteLLM frame dataclasses + content blocks
-├── migrations/                  # PostgreSQL schema migrations (checkpointer)
-├── scripts/ci/run.sh           # Docker entrypoint
-├── Dockerfile
-└── pyproject.toml
-```
-
-## Environment Variables
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `DATABASE_URL` | Yes | PostgreSQL connection string for LangGraph checkpointer |
-| `USE_MOCK_LLM` | No | `true` to use mock LLM (default: `false`) |
-| `LLM_MODEL_NAME` | No | Model name for real LLM calls (default: `gpt-4o-mini`) |
-
-LLM provider API keys are read from environment variables (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, etc.) or from Agent Vault via proxy env vars.
-
-## Development
-
-```bash
-# Install with dev dependencies
-pip install -e ".[dev]"
-
-# Code quality
-black .
-ruff check .
-mypy .
-
-# Testing
-pytest
-```
-
-## References
-
-- [ADR-003](../waypoint/docs/adr/003-harness-runtime-as-stdio-subprocess.md)
-- [LiteLLM Frame Protocol](../waypoint/archived/agents/lite-harness/src/sdk/PROTOCOL.md)
-- [LangGraph Documentation](https://python.langchain.com/docs/langgraph)
+## Filesystem Docker Image
+agents/
+└── <agent-name>/
+    ├── agent.ts            # Optional: model and runtime config
+    ├── instructions     # Required: the always-on system prompt
+        ├── 0*.<name>.md     # Required: Atleast 1. ALl under this folder will be combined together to single instruction.
+    ├── tools/              # Optional: typed functions the model can call
+    │   └── get_weather.ts
+    ├── skills/             # Optional: procedures loaded on demand
+    │   └── plan_a_trip.md
+    ├── channels/           # Optional: message channels (HTTP, Slack, Discord)
+    │   └── slack.ts
+    └── schedules/          # Optional: recurring cron jobs
+        └── weekly_recap.ts
+server/
+└── k8s/
+└── scripts/
+└── src/
+    └── chat.ts/
+└── Dockerfile
+└── package.json

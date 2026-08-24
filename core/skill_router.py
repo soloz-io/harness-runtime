@@ -53,18 +53,26 @@ class AgentSkillRouter:
         from deepagents.backends.filesystem import FilesystemBackend
 
         routes: dict[str, Any] = {}
+        agents_to_route: list[tuple[str, list[str]]] = []
 
         for node in self._nodes:
             config = node.get("config", {})
             agent_name = config.get("name", "")
             node_skills: list[str] = config.get("skills", [])
-            if not agent_name or not node_skills:
-                continue
+            if agent_name and node_skills:
+                agents_to_route.append((agent_name, node_skills))
+            for sub in config.get("subagents", []):
+                if isinstance(sub, dict):
+                    sub_name = sub.get("name", "")
+                    sub_skills = sub.get("skills", [])
+                    if sub_name and sub_skills:
+                        agents_to_route.append((sub_name, sub_skills))
 
+        for agent_name, agent_skills in agents_to_route:
             wrapper = Path(tempfile.mkdtemp(prefix=f"agent-{agent_name}-"))
             self._wrapper_dirs[agent_name] = wrapper
 
-            for skill_path in node_skills:
+            for skill_path in agent_skills:
                 skill_name = skill_path.rstrip("/").rsplit("/", 1)[-1]
                 skill_tmp = self._skill_tmp_dirs.get(skill_name)
                 if skill_tmp is None:
