@@ -104,7 +104,14 @@ def _build_run_tool(tools_dirs: list[Path]):
         # ── build command ──────────────────────────────────────────
         cmd: list[str] = [sys.executable, str(script)]
         if cli_args.strip():
-            cmd.extend(shlex.split(cli_args))
+            try:
+                cmd.extend(shlex.split(cli_args))
+            except ValueError as e:
+                return {
+                    "success": False,
+                    "output": f"Invalid cli_args: {e}\nReceived: {cli_args!r}",
+                    "exit_code": -1,
+                }
 
         logger.info(
             "run_tool",
