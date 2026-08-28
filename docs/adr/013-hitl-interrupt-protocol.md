@@ -1,14 +1,15 @@
 # ADR-013: HITL / interrupt_on Protocol
 
 **Date:** 2026-06-22
-**Status:** Accepted
+**Updated:** 2026-08-28
+**Status:** Accepted (updated)
 
 ## Context
 
-Some tool calls require human approval, editing, or response before execution. The harness-runtime supports this via LangGraph's interrupt mechanism and DeepAgents' `HumanInTheLoopMiddleware`.
+Some tool calls require human approval, editing, or response before execution. The harness-runtime supports this via LangGraph's interrupt mechanism.
 
 Three distinct HITL patterns exist:
-1. **Ask user** (e.g., `ask_user`): Human provides unstructured text as the tool result. The tool body is never executed — the human's response IS the output.
+1. **Ask user** (e.g., `ask_user`): Human provides unstructured text as the tool result. The tool body calls `langgraph.types.interrupt()` directly — the graph pauses unconditionally, and the resume value IS the tool result.
 2. **Phase review** (e.g., `review_content`): Human reviews a completed deliverable and either approves, rejects with feedback, or edits the content directly.
 3. **Approval gate** (legacy `script_reviewer` pattern): Human approves, edits, or rejects a tool call before execution. Rejection returns feedback to the agent.
 
@@ -16,15 +17,26 @@ These differ in semantics and `allowed_decisions`. Without a documented protocol
 
 ## Decision
 
-### Protocol: `interrupt_on` + `HumanInTheLoopMiddleware`
+### `ask_user` — Self-interrupting tool (updated 2026-08-28)
+
+`ask_user` calls `langgraph.types.interrupt()` directly in its tool body. This means:
+
+- **No `interrupt_on` config required** — the graph always pauses at a real LangGraph checkpoint interrupt when `ask_user` is invoked.
+- **Checkpoint always has `__interrupt__`** — `Command(resume=resume_payload)` always works correctly to resume.
+- The interrupt value is `{ name: "ask_user", args: { questions, type, file_path } }`, passed through `extract_interrupt_payload` and published as the `interrupt` field of the `ResultFrame`.
+- On resume, LangGraph returns the `decisions` payload as the return value of `interrupt()`, which `ask_user` unpacks to extract the human's text as the `ToolMessage` content.
+
+**Previous design (deprecated):** The tool body was a no-op and `HumanInTheLoopMiddleware` intercepted the call via `interrupt_on` config. This was fragile — forgetting `interrupt_on` caused the graph to run through `ask_user` without pausing, and sandbox restarts could leave the graph at `END` with no active interrupt, making `Command(resume=...)` a silent no-op.
+
+### `review_content` and approval-gate tools — `interrupt_on` + `HumanInTheLoopMiddleware`
 
 The `definition.json` orchestrator node declares which tools are interceptable via `interrupt_on`:
 
 ```json
 {
   "interrupt_on": {
-    "ask_user": {
-      "allowed_decisions": ["approve", "edit", "reject", "respond"]
+    "review_content": {
+      "allowed_decisions": ["approve", "edit", "reject"]
     }
   }
 }
@@ -43,7 +55,7 @@ The four `allowed_decisions` serve distinct purposes:
 | `reject` | Skip execution, return rejection feedback to agent | Denying a proposed action |
 | **`respond`** | **Return the human's text as the tool result** | **Ask-user style tools** |
 
-`respond` is unique: the tool body is **never executed**. The human's free-text input is injected directly as the `ToolMessage` content. This is essential for `ask_user` — the orchestrator needs the human's answer, not an approval/rejection.
+For `ask_user`, the resume value from `interrupt()` is the decisions payload; the tool body extracts `decisions[0].message` and returns it as the tool result string.
 
 ### Builtin HITL tool contracts
 

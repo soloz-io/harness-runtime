@@ -1,15 +1,20 @@
 """
 Ask User Tool — built-in HITL tool for relaying questions to the user.
 
-Registered on the `HumanInteractionMiddleware`.
-The tool body is never executed — it is intercepted by
-`HumanInTheLoopMiddleware` via `interrupt_on`. The human's response is
-injected as the tool result via the `respond` decision.
+The tool body calls ``langgraph.types.interrupt()`` directly, so the graph
+always pauses at an active LangGraph interrupt when ``ask_user`` is invoked —
+regardless of whether the workflow definition includes ``interrupt_on`` config.
+
+On resume, LangGraph returns the resume value (the decisions payload) as the
+return value of ``interrupt()``, which is then returned as the tool result.
+The harness event publisher reads ``__interrupt__`` from the checkpoint stream
+to emit the ``action_requests`` / ``review_configs`` interrupt event to the UI.
 """
 
-from typing import Literal
+from typing import Any, Literal
 
 from langchain_core.tools import tool
+from langgraph.types import interrupt
 from pydantic import BaseModel
 
 
@@ -47,9 +52,28 @@ def ask_user(
         file_path: Optional path to a file to display alongside the question.
 
     Returns:
-        The text of the user's response.
+        The text of the user's response (the ``respond`` decision's message).
     """
-    # The body is a no-op!
-    # The actual response is injected by the HumanInTheLoopMiddleware
-    # when the human submits their answer in the UI.
-    return ""
+    # Pause the graph at a real LangGraph interrupt. The interrupt value is
+    # the full ask_user payload so the harness event publisher can build the
+    # action_requests / review_configs interrupt event for the UI.
+    resume_value: Any = interrupt(
+        {
+            "name": "ask_user",
+            "args": {
+                "questions": [q.model_dump() for q in questions],
+                "type": type,
+                "file_path": file_path,
+            },
+        }
+    )
+
+    # resume_value is whatever was passed to Command(resume=...) by the SDK.
+    # Extract the human's text from the decisions payload if present.
+    if isinstance(resume_value, dict):
+        decisions = resume_value.get("decisions", [])
+        if decisions and isinstance(decisions, list):
+            first = decisions[0]
+            if isinstance(first, dict):
+                return str(first.get("message", ""))
+    return str(resume_value) if resume_value is not None else ""

@@ -202,7 +202,8 @@ class ExecutionManager:
             return Command(resume=resume_payload)
 
         # ---- Load checkpoint to find orphaned tool_call_ids ----
-        tool_call_ids: list[str] = []
+        # Track (id, name) pairs so we can exclude self-interrupting tools below.
+        tool_calls_pending: list[tuple[str, str]] = []  # (tool_call_id, tool_name)
         checkpointer = self._async_checkpointer or self.checkpointer
         if checkpointer is not None:
             try:
@@ -212,6 +213,18 @@ class ExecutionManager:
                 else:
                     cpt = checkpointer.get_tuple(config)
                 if cpt is not None:
+                    # If the graph has no pending tasks it reached END — there is no
+                    # active interrupt to resume.  Feed the decision as a new human
+                    # turn instead of calling Command(resume=...) which would be a
+                    # silent no-op on a finished graph.
+                    next_tasks = (getattr(cpt, "metadata", None) or {}).get("next", [])
+                    if not next_tasks:
+                        logger.info(
+                            "resume_graph_at_end_fallback_to_human_turn",
+                            session_id=session_id,
+                        )
+                        return input_payload
+
                     checkpoint = cpt.checkpoint if hasattr(cpt, "checkpoint") else cpt
                     if isinstance(checkpoint, dict):
                         channel_values = checkpoint.get("channel_values", {})
@@ -236,10 +249,24 @@ class ExecutionManager:
                                 if tcs and isinstance(tcs, list):
                                     for tc in tcs:
                                         tid = tc.get("id") or tc.get("tool_call_id") or ""
+                                        name = tc.get("name", "")
                                         if tid and tid not in completed_tool_call_ids:
-                                            tool_call_ids.append(tid)
+                                            tool_calls_pending.append((tid, name))
             except Exception as e:
                 logger.warning("resume_checkpoint_load_failed", error=str(e))
+
+        # Tools that call langgraph.types.interrupt() in their own body: they are
+        # resumed by Command(resume=...) alone — LangGraph automatically creates the
+        # ToolMessage from the tool's return value.  Manually injecting a ToolMessage
+        # here would produce two ToolMessages for the same tool_call_id, corrupting
+        # graph state.  Tools NOT in this set (review_content, script_reviewer, …)
+        # still need the manual ToolMessage injection via Command(update=...).
+        SELF_INTERRUPTING_TOOLS: set[str] = {"ask_user"}
+
+        # Only inject ToolMessages for non-self-interrupting orphaned calls.
+        tool_call_ids = [
+            tid for tid, name in tool_calls_pending if name not in SELF_INTERRUPTING_TOOLS
+        ]
 
         if not tool_call_ids:
             return Command(resume=resume_payload)
