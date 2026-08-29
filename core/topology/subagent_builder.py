@@ -227,22 +227,48 @@ def _build_subagent_spec(
 
     subagent_skills = skills or specialist_config.get("skills")
     if subagent_skills:
+        from pathlib import PurePosixPath
+
         from deepagents.middleware.permissions import FilesystemPermission
 
-        allowed = [f"{s.rstrip('/')}/**" for s in subagent_skills]
+        # Resolve each skill path to its actual mounted location under
+        # /workspace/.builder/skills/<skill-name>/.
+        # Definition files (definition.json) may use a different prefix
+        # (e.g. /workspace/.oranger/skills/) but the harness mounts all
+        # skills under /workspace/.builder/skills/ at startup.
+        resolved_skill_paths: list[str] = []
+        for raw_path in subagent_skills:
+            skill_name = PurePosixPath(raw_path.rstrip("/")).name
+            resolved_skill_paths.append(f"/workspace/.builder/skills/{skill_name}/")
+
+        # Permissions — order matters: _check_fs_permission is first-match.
+        # 1. Explicitly allow reads from this agent's own resolved skill dirs.
+        # 2. Deny reads to *other* agents' skill dirs (must precede the broad allow).
+        # 3. Allow full read+write across /workspace/** for all output files.
+        allowed_read = [f"{p.rstrip('/')}/**" for p in resolved_skill_paths]
         subagent_spec["permissions"] = [
-            FilesystemPermission(operations=["read"], paths=allowed, mode="allow"),
-            FilesystemPermission(
-                operations=["read", "write"],
-                paths=["/workspace/.builder/scratch/**"],
-                mode="allow",
-            ),
+            FilesystemPermission(operations=["read"], paths=allowed_read, mode="allow"),
             FilesystemPermission(
                 operations=["read"], paths=["/workspace/.builder/skills/*/**"], mode="deny"
             ),
+            FilesystemPermission(
+                operations=["read", "write"],
+                paths=["/workspace/**"],
+                mode="allow",
+            ),
         ]
 
-        subagent_spec["skills"] = [f"/workspace/.builder/agent/{agent_name}/"]
+        logger.info(
+            "subagent_skills_resolved",
+            agent_name=agent_name,
+            raw_skills=subagent_skills,
+            resolved_skills=resolved_skill_paths,
+        )
+
+        # Pass the resolved paths directly to SkillsMiddleware via the spec.
+        # The old code used /workspace/.builder/agent/{agent_name}/ which
+        # does not exist and caused SkillsMiddleware to load nothing.
+        subagent_spec["skills"] = resolved_skill_paths
 
     if state_schema_class is not None:
         subagent_spec["context_schema"] = state_schema_class

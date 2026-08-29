@@ -5,7 +5,7 @@ import json as _json
 import os
 import time
 import traceback
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, AsyncGenerator, Optional
 
 import redis.asyncio as aioredis
@@ -50,6 +50,16 @@ class SessionState:
     session: Session
     publisher: SSEEventPublisher
     task: Optional[asyncio.Task[Any]] = None
+    # Serializes turn execution for this session. The LangGraph Postgres
+    # checkpointer has no built-in mutual exclusion for concurrent
+    # invocations against the same thread_id: two overlapping calls to
+    # session.async_run_turn() (e.g. an async [System Notification] turn
+    # racing a user's own message) can each read the same starting
+    # checkpoint and commit divergent forks, silently orphaning whichever
+    # one doesn't end up "latest" — even though its response was already
+    # streamed to the user once. This lock forces one turn to fully commit
+    # before the next begins.
+    turn_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 def _trim_sentinel(session_id: str) -> None:
@@ -161,7 +171,11 @@ async def _run_turn_async(state: SessionState, user_content: str, role: str = "u
     publisher = state.publisher
     state.task = asyncio.current_task()
     try:
-        await session.async_run_turn(user_content=user_content, publisher=publisher, role=role)
+        # See SessionState.turn_lock — waits here if another turn for this
+        # session (e.g. a [System Notification] fallthrough) is still
+        # committing its checkpoint, instead of racing it.
+        async with state.turn_lock:
+            await session.async_run_turn(user_content=user_content, publisher=publisher, role=role)
     except asyncio.CancelledError:
         logger.info("session_run_turn_cancelled", session_id=session.session_id)
         publisher.publish_result(
