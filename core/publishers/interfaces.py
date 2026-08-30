@@ -51,6 +51,16 @@ class ToolEventPublisher(ABC):
     """Publish tool execution events (deltas, results)."""
 
     @abstractmethod
+    def publish_tool_started(
+        self,
+        *,
+        session_id: str,
+        tool_call_id: str,
+        tool_name: str,
+        parent_tool_call_id: Optional[str] = None,
+    ) -> None: ...
+
+    @abstractmethod
     def publish_tool_output_delta(
         self,
         *,

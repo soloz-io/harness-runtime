@@ -263,6 +263,26 @@ class SSEEventPublisher(EventPublisher):
             )
         )
 
+    def publish_tool_started(
+        self,
+        *,
+        session_id: str,
+        tool_call_id: str,
+        tool_name: str,
+        parent_tool_call_id: Optional[str] = None,
+    ) -> None:
+        self._write(
+            self._protocol_event(
+                "tools",
+                {
+                    "event": "tool-call-started",
+                    "tool_call_id": tool_call_id,
+                    "tool_name": tool_name,
+                    **({"parent_tool_call_id": parent_tool_call_id} if parent_tool_call_id else {}),
+                },
+            )
+        )
+
     def publish_tool_result(
         self,
         *,

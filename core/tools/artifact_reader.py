@@ -25,12 +25,24 @@ from __future__ import annotations
 
 import os
 import time
+import uuid
 from typing import Optional
 
 import psycopg
 
 DEFAULT_RETRIES = 3
 DEFAULT_RETRY_DELAY = 2.0
+
+_MEDIA_TYPES = {
+    ".md": "text/markdown",
+    ".json": "application/json",
+    ".jsonl": "application/x-ndjson",
+    ".tsx": "text/typescript",
+    ".ts": "text/typescript",
+    ".txt": "text/plain",
+    ".yaml": "text/yaml",
+    ".yml": "text/yaml",
+}
 
 
 def _normalize_filepath(file_path: str) -> str:
@@ -119,3 +131,59 @@ def read_artifact_from_db(
     raise FileNotFoundError(
         f"Artifact '{filename}' not found in DB (scope={scope}, filepath={filepath}){detail}"
     )
+
+
+def write_artifact_to_db(
+    filename: str,
+    content: str,
+    *,
+    session_id: Optional[str] = None,
+    workspace_id: Optional[str] = None,
+    app_id: Optional[str] = None,
+) -> None:
+    """Write an artifact's content into ``agent_output_files`` — the write-side
+    counterpart to :func:`read_artifact_from_db`.
+
+    CLI tools (``build_video_request.py``, ``clips_cli.py``, etc.) write pipeline
+    outputs straight to disk with plain file I/O. That path never reaches the
+    DB, so the DB-backed UI file browser never learns those files exist even
+    though the rest of the pipeline reads them from disk correctly. Call this
+    right after writing to disk — it mirrors
+    ``core.message_writer.write_agent_output_files``'s upsert exactly (same
+    table, same ON CONFLICT semantics, same scope-key rule) so a CLI tool's
+    output shows up in the UI the same way the agent's own ``write_file``
+    calls already do. This function never touches the filesystem itself.
+
+    Raises the same way ``read_artifact_from_db`` does (``ValueError`` for a
+    missing ``DATABASE_URL``/``SESSION_ID``, otherwise propagates the DB
+    error) — callers should treat this as best-effort and not let a DB hiccup
+    fail the disk write it's piggybacking on.
+    """
+    db_url = os.environ.get("DATABASE_URL")
+    sid = session_id or os.environ.get("SESSION_ID")
+    wid = workspace_id or os.environ.get("WORKSPACE_ID", "")
+    aid = app_id or os.environ.get("APP_ID")
+    if not db_url or not sid:
+        raise ValueError("DATABASE_URL or SESSION_ID not available")
+
+    filepath = _normalize_filepath(filename)
+    scope = _scope_key(filepath, sid, wid, aid)
+    file_name = filepath.rsplit("/", 1)[-1]
+    ext = ("." + file_name.rsplit(".", 1)[-1].lower()) if "." in file_name else ""
+    fmt = "markdown" if filepath.endswith(".md") else "json"
+    media_type = _MEDIA_TYPES.get(ext, "text/plain")
+
+    with psycopg.connect(db_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO agent_output_files
+                    (id, session_id, filename, filepath, content, format, media_type, url)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (session_id, filepath)
+                    DO UPDATE SET content = EXCLUDED.content,
+                                  format  = EXCLUDED.format,
+                                  media_type = EXCLUDED.media_type
+                """,
+                (uuid.uuid4().hex, scope, file_name, filepath, content, fmt, media_type, ""),
+            )

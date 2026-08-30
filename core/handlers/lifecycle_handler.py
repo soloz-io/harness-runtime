@@ -50,10 +50,26 @@ class LifecycleHandler(EventHandler):
                     ns_tuple: Namespace = tuple(ns_list)
                     state.ns_to_tool_call[ns_tuple] = tool_call_id
                     state.subagent_names[ns_tuple] = data.get("graph_name", "task")
+
+                    # Resolve parent: ns_tuple[:-1] is the parent namespace key.
+                    # For root-level subagents ns_tuple[:-1] == () → None (correct).
+                    parent_ns: Namespace = ns_tuple[:-1]
+                    parent_tool_call_id = (
+                        state.ns_to_tool_call.get(parent_ns) if parent_ns else None
+                    )
+
+                    publisher.publish_tool_started(
+                        session_id=session_id,
+                        tool_call_id=tool_call_id,
+                        tool_name=data.get("graph_name", "task"),
+                        parent_tool_call_id=parent_tool_call_id,
+                    )
+
                     logger.debug(
                         "subagent_started",
                         namespace=ns_list,
                         tool_call_id=tool_call_id,
+                        parent_tool_call_id=parent_tool_call_id,
                     )
             return True
 

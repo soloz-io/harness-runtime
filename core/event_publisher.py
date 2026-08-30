@@ -88,6 +88,16 @@ class EventPublisher(ABC):
     ) -> None: ...
 
     @abstractmethod
+    def publish_tool_started(
+        self,
+        *,
+        session_id: str,
+        tool_call_id: str,
+        tool_name: str,
+        parent_tool_call_id: Optional[str] = None,
+    ) -> None: ...
+
+    @abstractmethod
     def publish_stream_event_text(self, *, session_id: str, text: str, index: int = 0) -> None: ...
 
     @abstractmethod
@@ -210,6 +220,16 @@ class StdioPublisher(EventPublisher):
         tool_call_id: str,
         tool_name: str,
         delta: str,
+    ) -> None:
+        pass
+
+    def publish_tool_started(
+        self,
+        *,
+        session_id: str,
+        tool_call_id: str,
+        tool_name: str,
+        parent_tool_call_id: Optional[str] = None,
     ) -> None:
         pass
 

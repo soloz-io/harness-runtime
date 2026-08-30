@@ -169,13 +169,47 @@ def shutdown_execution_manager() -> None:
 async def _run_turn_async(state: SessionState, user_content: str, role: str = "user") -> None:
     session = state.session
     publisher = state.publisher
-    state.task = asyncio.current_task()
+    my_task = asyncio.current_task()
+    session_id = session.session_id
+    content_preview = user_content[:120] if user_content else ""
+    lock_contended = state.turn_lock.locked()
+    logger.info(
+        "turn_scheduled",
+        session_id=session_id,
+        role=role,
+        content_preview=content_preview,
+        lock_contended=lock_contended,
+        task=id(my_task),
+    )
     try:
         # See SessionState.turn_lock — waits here if another turn for this
         # session (e.g. a [System Notification] fallthrough) is still
         # committing its checkpoint, instead of racing it.
+        if lock_contended:
+            logger.info(
+                "turn_awaiting_lock",
+                session_id=session_id,
+                role=role,
+                content_preview=content_preview,
+                task=id(my_task),
+            )
         async with state.turn_lock:
+            logger.info(
+                "turn_lock_acquired",
+                session_id=session_id,
+                role=role,
+                content_preview=content_preview,
+                waited=lock_contended,
+                task=id(my_task),
+            )
             await session.async_run_turn(user_content=user_content, publisher=publisher, role=role)
+            logger.info(
+                "turn_completed",
+                session_id=session_id,
+                role=role,
+                content_preview=content_preview,
+                task=id(my_task),
+            )
     except asyncio.CancelledError:
         logger.info("session_run_turn_cancelled", session_id=session.session_id)
         publisher.publish_result(
@@ -194,7 +228,24 @@ async def _run_turn_async(state: SessionState, user_content: str, role: str = "u
             result=str(e),
         )
     finally:
-        state.task = None
+        # Only clear state.task if it's still us. Under the turn_lock, a
+        # second turn (e.g. the [System Notification] fallthrough) may have
+        # already been scheduled and assigned to state.task while we were
+        # running — unconditionally nulling it here would drop the only
+        # strong reference to that still-pending task at the exact moment
+        # it's waiting to acquire the lock, letting asyncio silently
+        # garbage-collect it before it ever runs.
+        is_current = state.task is my_task
+        logger.info(
+            "turn_finally",
+            session_id=session_id,
+            role=role,
+            task=id(my_task),
+            cleared_state_task=is_current,
+            superseded_by=id(state.task) if not is_current and state.task is not None else None,
+        )
+        if is_current:
+            state.task = None
         publisher.close()
 
 
@@ -322,6 +373,16 @@ async def handle_message(session_id: str, body: dict[str, Any]) -> dict[str, Any
         if notice_text:
             message = f"{_SYSTEM_NOTICE_PREFIX} {notice_text}"
             role = "user"
+            logger.info(
+                "notification_fallthrough_turn",
+                session_id=session_id,
+                notice_text=notice_text[:200],
+                already_in_flight=(
+                    session_id in session_store
+                    and session_store[session_id].task is not None
+                    and not session_store[session_id].task.done()
+                ),
+            )
         else:
             return {"success": True}
 
@@ -354,7 +415,18 @@ async def handle_message(session_id: str, body: dict[str, Any]) -> dict[str, Any
         logger.info("session_initialized", session_id=session_id)
 
     if message or resume_payload:
+        prior_task = state.task
+        prior_in_flight = prior_task is not None and not prior_task.done()
         state.task = asyncio.create_task(_run_turn_async(state, message, role))
+        logger.info(
+            "handle_message_task_created",
+            session_id=session_id,
+            role=role,
+            content_preview=(message or "")[:120],
+            prior_task_in_flight=prior_in_flight,
+            prior_task=id(prior_task) if prior_task is not None else None,
+            new_task=id(state.task),
+        )
 
     return {"success": True}
 
