@@ -118,7 +118,12 @@ jobs:
           git clone https://x-access-token:${FLEET_REGISTRY_TOKEN}@github.com/soloz-io/fleet-registry.git /tmp/fleet-registry
           cd /tmp/fleet-registry
 
-          WORKLOAD=tenants/waypoint/workloads/harness-runtime
+          # base/, beside the other workload pins. A second copy of this file
+          # used to sit at workloads/harness-runtime/ with a different digest for
+          # the same image and nothing updating it — two answers to "the
+          # harness-runtime digest", which is how the wrong base gets built.
+          # oranger's oranger-sandbox workflow reads this same path.
+          WORKLOAD=tenants/waypoint/workloads/base/harness-runtime
           mkdir -p "$WORKLOAD"
 
           # Bootstrap the kustomization on the first push, then bump the digest.
