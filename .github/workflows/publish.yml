@@ -142,5 +142,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add "$WORKLOAD/kustomization.yaml"
-          git commit -m "chore(harness-runtime): update image digest to ${SHA}" || exit 0
+          git commit -m "chore(harness-runtime): pin image built from ${SHA}" -m "image: ${DIGEST}" || exit 0
           git push
