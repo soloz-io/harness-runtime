@@ -143,4 +143,17 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add "$WORKLOAD/kustomization.yaml"
           git commit -m "chore(harness-runtime): pin image built from ${SHA}" -m "image: ${DIGEST}" || exit 0
-          git push
+          # Retry with rebase to handle race conditions when parallel workflows
+          # push to fleet-registry. Several image builds land there at once —
+          # this repo, waypoint's six, and oranger's two — so a bare push loses
+          # whenever another job commits between the clone and the push:
+          #
+          #   ! [remote rejected] main -> main (cannot lock ref 'refs/heads/main':
+          #     is at 9ecf124... but expected 7eda9fd...)
+          #
+          # The image is already pushed to ghcr by then, so the only casualty is
+          # the pin — the build silently does not reach the cluster. Same loop the
+          # waypoint workflows already use.
+          for i in {1..5}; do
+            git pull --rebase origin main && git push && break || sleep $((RANDOM % 5 + 1))
+          done
