@@ -26,6 +26,7 @@ from psycopg_pool import AsyncConnectionPool, ConnectionPool
 from core.event_publisher import EventPublisher
 from core.execution_state import ExecutionState
 from core.handlers import create_handler_chain
+from core.message_writer import stamp_checkpoint_id
 from core.types import Event
 
 logger = structlog.get_logger(__name__)
@@ -421,6 +422,34 @@ class ExecutionManager:
     # Async execution
     # ------------------------------------------------------------------
 
+    async def _stamp_turn_checkpoint(self, graph: Any, config: Any, session_id: str) -> None:
+        """Attach the just-committed checkpoint id to this turn's messages.
+
+        Reads the graph's own state rather than tracking ids during the stream:
+        LangGraph writes a checkpoint per superstep, and the one that matters
+        for "restore to this message" is the last one of the turn, which is
+        exactly what get_state returns once astream_events has drained.
+
+        Entirely best-effort. A graph without a checkpointer has no state to
+        read, and a failure here costs the UI a precise restore target — it
+        falls back to positional pairing — which is not worth failing a
+        completed turn over.
+        """
+        pool = getattr(self, "_pool", None)
+        if pool is None:
+            return
+        try:
+            snapshot = await graph.aget_state(config)
+            checkpoint_id = (
+                (snapshot.config or {}).get("configurable", {}).get("checkpoint_id")
+                if snapshot
+                else None
+            )
+            if checkpoint_id:
+                await asyncio.to_thread(stamp_checkpoint_id, pool, session_id, str(checkpoint_id))
+        except Exception:
+            logger.debug("stamp_turn_checkpoint_skipped", session_id=session_id, exc_info=True)
+
     async def async_execute(
         self,
         graph: Runnable,
@@ -495,6 +524,14 @@ class ExecutionManager:
                 start_time,
                 num_turns,
             )
+
+            # Record which checkpoint this turn's messages belong to, now that
+            # the superstep has committed and the id exists (ADR-017).
+            #
+            # Here rather than inside the values handler because the stream
+            # events that write those rows carry no checkpoint reference — the
+            # id is only knowable after the fact, from the graph's own state.
+            await self._stamp_turn_checkpoint(graph, config, session_id)
 
             if span:
                 span.set_attribute("duration_ms", int((time.time() - start_time) * 1000))

@@ -29,3 +29,14 @@ def build_artifact_backend(
         )
     except ImportError:
         return None
+
+
+# The real-disk opt-in lives in ``core.agent_backend``, not here.
+#
+# Conceptually it belongs beside this function — both answer "which backend
+# does this get". It cannot live in this package: ``core/session/__init__.py``
+# eagerly imports ``Session``, so importing anything from ``core.session``
+# drags in the whole session module, and the topology builder that needs the
+# opt-in is itself imported *by* that module. Putting it here made every
+# consumer break the resulting cycle with a function-local import, which is a
+# worse outcome than one module in a different place.

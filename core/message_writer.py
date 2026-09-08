@@ -53,6 +53,7 @@ def write_chat_messages(
     messages: list[dict[str, Any]],
     offset: int,
     source: str = "deepagents",
+    checkpoint_id: Optional[str] = None,
 ) -> None:
     """Insert new messages into chat_messages.
 
@@ -79,8 +80,8 @@ def write_chat_messages(
                     cur.execute(
                         """
                         INSERT INTO chat_messages
-                            (id, session_id, role, content, message, sequence, source)
-                        VALUES (%s, %s, %s, %s::jsonb, %s::jsonb, %s, %s)
+                            (id, session_id, role, content, message, sequence, source, checkpoint_id)
+                        VALUES (%s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s)
                         ON CONFLICT (session_id, (message->>'id')) DO NOTHING
                         """,
                         (
@@ -91,6 +92,12 @@ def write_chat_messages(
                             Jsonb(msg),
                             offset + i,
                             source,
+                            # The checkpoint this batch was written at, so the
+                            # UI can offer "restore to this message" as an
+                            # association rather than a positional guess. None
+                            # when the caller has no checkpointer (specialists
+                            # run with checkpointer=None).
+                            checkpoint_id,
                         ),
                     )
                     if cur.rowcount == 0:
@@ -208,3 +215,42 @@ def _file_scope_key(
     if app_id and filepath.startswith(".global/"):
         return app_id
     return session_id
+
+
+def stamp_checkpoint_id(pool: ConnectionPool, session_id: str, checkpoint_id: str) -> None:
+    """Record which checkpoint this turn's messages were written at.
+
+    Applied AFTER the turn rather than during it, because the checkpoint id only
+    exists once the superstep that produced these messages has been committed —
+    the stream events that trigger the writes carry no reference to it.
+
+    Every row for this session still missing a checkpoint id belongs to the turn
+    that just finished: writes are serialised per session, and a previous turn
+    stamped its own rows on the way out. So the `IS NULL` predicate is the
+    association, not an approximation of it.
+
+    Best-effort. A message whose checkpoint id is missing degrades to the
+    positional pairing the UI already falls back on; failing the turn over it
+    would trade a cosmetic loss for a real one.
+    """
+    if not checkpoint_id:
+        return
+    try:
+        with pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE chat_messages
+                       SET checkpoint_id = %s
+                     WHERE session_id = %s
+                       AND checkpoint_id IS NULL
+                    """,
+                    (checkpoint_id, session_id),
+                )
+    except Exception:
+        logger.warning(
+            "stamp_checkpoint_id_failed",
+            session_id=session_id,
+            checkpoint_id=checkpoint_id,
+            exc_info=True,
+        )

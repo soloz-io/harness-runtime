@@ -1,11 +1,140 @@
+import base64
 from typing import Any, Optional
+
+import httpx
+import structlog
 
 from core.factory import build_agent_from_definition
 from core.tool_registry import ToolRegistry
 
+logger = structlog.get_logger(__name__)
+
+# DeepSeek caps inline images at 32 MiB; stay well under so the base64
+# expansion (~4/3) still fits comfortably within a single request.
+MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024
+
+
+async def inline_object_attachments(
+    attachments: Optional[list[dict[str, Any]]],
+) -> Optional[list[dict[str, Any]]]:
+    """Download ``source.type == "object"`` attachments and return them as
+    inline base64 (``source.type == "data"``) instead.
+
+    The model provider is reached through AI_GATEWAY_BASE_URL
+    (api.deepseek.com in this deployment). Handing it an object-storage URL
+    makes *its* servers fetch the bytes, which fails outright here: a real
+    sandbox turn died with ``400 ... Failed to download image from
+    https://hel1.your-objectstorage.com/...`` even though that URL serves a
+    valid 368KB image/png publicly (HTTP 200, verified directly). The
+    provider simply cannot reach Hetzner object storage. DeepSeek documents
+    base64 data URIs as a first-class alternative to URLs, so fetching here
+    — inside the cluster, where the bucket *is* reachable — and inlining the
+    bytes removes the dependency on provider-side egress entirely.
+
+    Raises on any download failure rather than silently dropping the image:
+    a turn that quietly proceeds without an attachment the user explicitly
+    supplied produces confidently wrong work.
+    """
+    if not attachments:
+        return attachments
+
+    result: list[dict[str, Any]] = []
+    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+        for a in attachments:
+            source = a["source"]
+            if source["type"] != "object":
+                result.append(a)
+                continue
+
+            url = source["value"]
+            response = await client.get(url)
+            response.raise_for_status()
+            data = response.content
+            if len(data) > MAX_ATTACHMENT_BYTES:
+                raise ValueError(
+                    f"Attachment {url} is {len(data)} bytes, over the "
+                    f"{MAX_ATTACHMENT_BYTES}-byte inline limit."
+                )
+
+            mime = a["mime"]
+            encoded = base64.b64encode(data).decode("ascii")
+            logger.info("attachment_inlined", url=url, bytes=len(data), mime=mime)
+            result.append(
+                {
+                    **a,
+                    "source": {"type": "data", "value": f"data:{mime};base64,{encoded}"},
+                    "source_url": url,
+                }
+            )
+    return result
+
+
+def _build_message_content(
+    user_content: str, attachments: Optional[list[dict[str, Any]]]
+) -> str | list[dict[str, Any]]:
+    """Return plain text, or LangChain's provider-agnostic multimodal content
+    blocks when attachments are present. `source.type == "object"` (the only
+    value the SDK produces in v1 — attachments are uploaded to S3 before this
+    is ever called) maps to LangChain's `source_type: "url"` image block, so
+    the provider resolves the URL itself with no fetch-and-re-encode here.
+    `source.type == "data"` is kept for forward compatibility with a future
+    caller that skips the upload step.
+
+    Each image block is preceded by a plain `"text"` block stating its URL.
+    An image block's `url`/`data` field is consumed by the provider to fetch
+    or render the image for vision input — it is not exposed to the model as
+    readable text (confirmed against a real transcript: an orchestrator
+    asked to forward an attachment's URL to a subagent's task() description
+    reported "<url not provided>", even though the image block, with the URL
+    in it, was genuinely part of its own message). Without a text block
+    carrying the literal URL, the model can see the picture but has no way
+    to recite its source — so it can't be blamed for not forwarding what it
+    was never actually given as text. The orchestrator's own
+    `15-attachment-forwarding.md` instructions assume this text is present.
+    """
+    content: list[dict[str, Any]] = [{"type": "text", "text": user_content}] if user_content else []
+    for a in attachments or []:
+        source = a["source"]
+        if source["type"] == "object":
+            content.append({"type": "text", "text": f"[Attached image: {source['value']}]"})
+            content.append(
+                {
+                    "type": "image",
+                    "source_type": "url",
+                    "url": source["value"],
+                    "mime_type": a["mime"],
+                }
+            )
+        elif source["type"] == "data":
+            # source_url survives inline_object_attachments' base64 conversion
+            # so the model can still cite/forward the original location.
+            origin = a.get("source_url")
+            content.append(
+                {
+                    "type": "text",
+                    "text": (
+                        f"[Attached image: {origin}]"
+                        if origin
+                        else "[Attached image: inline data, no URL available]"
+                    ),
+                }
+            )
+            content.append(
+                {
+                    "type": "image",
+                    "source_type": "base64",
+                    "data": source["value"].split(",", 1)[1],
+                    "mime_type": a["mime"],
+                }
+            )
+    return content if attachments else user_content
+
 
 def prepare_turn_input(
-    base_payload: dict[str, Any], user_content: str, role: str = "user"
+    base_payload: dict[str, Any],
+    user_content: str,
+    role: str = "user",
+    attachments: Optional[list[dict[str, Any]]] = None,
 ) -> dict[str, Any]:
     """Return a shallow copy of ``base_payload`` with ``user_content`` appended as a message.
 
@@ -13,8 +142,10 @@ def prepare_turn_input(
     """
     payload = dict(base_payload)
     messages = list(payload.get("messages", []))
-    if user_content:
-        messages.append({"role": role, "content": user_content})
+    if user_content or attachments:
+        messages.append(
+            {"role": role, "content": _build_message_content(user_content, attachments)}
+        )
     payload["messages"] = messages
     return payload
 

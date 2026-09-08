@@ -179,9 +179,18 @@ class SkillsManager:
         for skill_name, tmp_dir in self._tmp_dirs.items():
             link_path = stable_root / skill_name
             target = tmp_dir / skill_name
-            if not link_path.exists():
-                os.symlink(str(target), str(link_path))
-                logger.info("skill_symlink_created", link=str(link_path), target=str(target))
+            # is_symlink() as well as exists(): exists() follows the link, so
+            # a symlink left by a restored workspace and pointing at a
+            # previous session's /tmp/skill-* dir reports False while the
+            # link itself is still there — os.symlink would then raise
+            # FileExistsError and abort session init. Replace it instead.
+            if link_path.is_symlink() or link_path.exists():
+                if link_path.is_symlink() or link_path.is_file():
+                    link_path.unlink()
+                else:
+                    continue
+            os.symlink(str(target), str(link_path))
+            logger.info("skill_symlink_created", link=str(link_path), target=str(target))
 
     def _create_scratch(self, routes: dict[str, Any]) -> None:
         """Create a scratch workspace for CLI compilation output."""
@@ -199,6 +208,9 @@ class SkillsManager:
 
         stable_scratch = runtime_base / "scratch"
         stable_scratch.parent.mkdir(parents=True, exist_ok=True)
+        # Same dangling-symlink case as _create_skill_symlinks — see there.
+        if stable_scratch.is_symlink() or stable_scratch.is_file():
+            stable_scratch.unlink()
         if not stable_scratch.exists():
             os.symlink(str(scratch_dir), str(stable_scratch))
             logger.info(

@@ -166,7 +166,12 @@ def shutdown_execution_manager() -> None:
         logger.info("execution_manager_shutdown")
 
 
-async def _run_turn_async(state: SessionState, user_content: str, role: str = "user") -> None:
+async def _run_turn_async(
+    state: SessionState,
+    user_content: str,
+    role: str = "user",
+    attachments: Optional[list[dict[str, Any]]] = None,
+) -> None:
     session = state.session
     publisher = state.publisher
     my_task = asyncio.current_task()
@@ -202,7 +207,9 @@ async def _run_turn_async(state: SessionState, user_content: str, role: str = "u
                 waited=lock_contended,
                 task=id(my_task),
             )
-            await session.async_run_turn(user_content=user_content, publisher=publisher, role=role)
+            await session.async_run_turn(
+                user_content=user_content, publisher=publisher, role=role, attachments=attachments
+            )
             logger.info(
                 "turn_completed",
                 session_id=session_id,
@@ -309,6 +316,7 @@ async def handle_message(session_id: str, body: dict[str, Any]) -> dict[str, Any
     agent_definition = body.get("agent_definition")
     input_payload = body.get("input_payload", {})
     resume_payload = body.get("resume_payload")
+    attachments = body.get("attachments")
     restore_checkpoint_id = body.get("restore_checkpoint_id")
     workspace_id = body.get("workspace_id") or os.environ.get("WORKSPACE_ID")
     app_id = body.get("app_id")
@@ -339,6 +347,20 @@ async def handle_message(session_id: str, body: dict[str, Any]) -> dict[str, Any
 
         # Invalidate in-memory session so next turn starts fresh from restored checkpoint
         session_store.pop(session_id, None)
+
+    # No workspace restore here, deliberately.
+    #
+    # This used to accept `restore_git_sha` and check the workspace out to that
+    # commit. Both halves of that are gone: git is no longer the source of
+    # truth for workspace content (zero-ops ADR-052 §14.2 — S3 is), and
+    # restoring a workspace is a platform operation the harness must not know
+    # about (§14, waypoint ADR-036 §10).
+    #
+    # Undo-to-checkpoint is now a NEW SANDBOX pinned to that checkpoint
+    # (§14.3): the workspace is an emptyDir with S3 behind it, so a pod started
+    # with workspacePersistence.checkpointId IS the restored workspace. That
+    # also removes the failure this endpoint had — restoring files underneath a
+    # running agent whose file descriptors were already open.
 
     # System messages: write the notification row (for the audio-player UI),
     # then fall through to a user-role graph turn so the agent is informed.
@@ -417,7 +439,7 @@ async def handle_message(session_id: str, body: dict[str, Any]) -> dict[str, Any
     if message or resume_payload:
         prior_task = state.task
         prior_in_flight = prior_task is not None and not prior_task.done()
-        state.task = asyncio.create_task(_run_turn_async(state, message, role))
+        state.task = asyncio.create_task(_run_turn_async(state, message, role, attachments))
         logger.info(
             "handle_message_task_created",
             session_id=session_id,

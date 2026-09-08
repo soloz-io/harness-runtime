@@ -7,6 +7,7 @@ declarative subagents, nested deep agents, and nested subgraphs) can build
 its graph without modifying the existing star/acrylic builders.
 """
 
+from pathlib import Path
 from typing import Any, Dict, List
 
 import structlog
@@ -16,7 +17,9 @@ from langchain_quickjs import CodeInterpreterMiddleware
 from core.middleware.custom_tool_middleware import CustomToolMiddleware
 from core.middleware.human_interaction import HumanInteractionMiddleware
 from core.middleware.rubric_middleware import build_rubric_middlewares
+from core.middleware.shell_middleware import ShellMiddleware
 from core.middleware.structured_output import build_tool_strategy, resolve_structured_output_model
+from core.middleware.url_fetch_middleware import UrlFetchMiddleware
 
 logger = structlog.get_logger(__name__)
 
@@ -76,19 +79,38 @@ def build_middleware_stack(
     model: Any,
     *,
     tools_spec: Any = None,
+    extra_tool_dirs: list[Path] | None = None,
 ) -> list[Any]:
     """Replicate the orchestrator middleware stack (rubric → code interp →
-    HITL → custom tools)."""
+    HITL → shell → url fetch → custom tools).
+
+    ShellMiddleware exposes load_skill, which stays unconditional — same
+    rationale as subagent_builder.py's star-topology stack: every specialist
+    that declares config.skills expects load_skill to be a real tool, not
+    deepagents' own skills=[...] kwarg's read_file-based convention (which
+    create_deep_agent also wires in when skills are configured — the two
+    coexist; a specialist's own prompt is free to use either).
+
+    ``extra_tool_dirs`` (typically a skill's own ``scripts/`` directory —
+    see ``build_deep_agent_runnable``) is searched by ``run_tool`` alongside
+    ``tools_spec``'s node/shared dirs, so a skill can ship an executable
+    CLI wrapper (e.g. ``compile_check_cli.py``) without also requiring a
+    separate ``agents/<node-id>/tools/`` folder baked into the image.
+    """
     rubric_config = config.get("rubric")
     middleware_stack = build_rubric_middlewares(rubric_config, model)
     middleware_stack.append(CodeInterpreterMiddleware(timeout=300))
     logger.info("code_interpreter_middleware_appended")
     middleware_stack.append(HumanInteractionMiddleware())
-    if tools_spec:
-        middleware_stack.append(CustomToolMiddleware(tools_spec.search_dirs))
+    middleware_stack.append(ShellMiddleware())
+    middleware_stack.append(UrlFetchMiddleware())
+    tool_dirs: list[Path] = list(tools_spec.search_dirs) if tools_spec else []
+    tool_dirs.extend(extra_tool_dirs or [])
+    if tool_dirs:
+        middleware_stack.append(CustomToolMiddleware(tool_dirs))
         logger.info(
             "custom_tool_middleware_appended",
-            tools_dirs=[str(d) for d in tools_spec.search_dirs],
+            tools_dirs=[str(d) for d in tool_dirs],
         )
     return middleware_stack
 
@@ -160,15 +182,36 @@ def build_deep_agent_runnable(
     elif backend is not None:
         deep_agent_kwargs["backend"] = backend
         logger.info("artifact_backend_wired")
+    # Deliberately NOT passed to create_deep_agent as skills=[...]: that wires
+    # deepagents' SkillsMiddleware, whose SKILLS_SYSTEM_PROMPT instructs the
+    # model to read skills with `read_file(file_path=..., limit=1000)`. That
+    # directly contradicts agents/shared/skill-contracts.md, which is baked
+    # into every specialist's prompt and mandates `load_skill(skill_name=...)`
+    # (ShellMiddleware) with BLOCK-on-error semantics. Given both, the model
+    # follows the deepagents prompt — it is more concrete and ships a worked
+    # example — and load_skill goes unused, which was observed in a real
+    # session. Skill names and descriptions already reach the model via each
+    # agent's own <agent_skills> section, so SkillsMiddleware's listing is
+    # redundant here too. load_skill resolves names to paths itself.
     node_skills = config.get("skills") or skills
     if node_skills:
-        deep_agent_kwargs["skills"] = node_skills
-        logger.info("skills_wired", skills=node_skills)
+        logger.info("skills_available_via_load_skill", skills=node_skills)
+
+    # A skill's own scripts/ dir (e.g. workflow-preview's compile_check_cli.py,
+    # shipped alongside compile-preview.js) is dispatchable via run_tool once
+    # SkillsManager has symlinked the skill onto real disk — checked here,
+    # not assumed, since it depends on skill isolation having already run.
+    skill_tool_dirs = [
+        scripts_dir
+        for skill_path in (node_skills or [])
+        if (scripts_dir := Path(skill_path) / "scripts").is_dir()
+    ]
 
     middleware_stack = build_middleware_stack(
         config,
         deep_agent_kwargs["model"],
         tools_spec=(tools_ctx.node_tools.get(node_id) if tools_ctx and node_id else None),
+        extra_tool_dirs=skill_tool_dirs,
     )
     if middleware_stack:
         deep_agent_kwargs["middleware"] = middleware_stack

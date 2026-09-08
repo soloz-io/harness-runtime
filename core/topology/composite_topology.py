@@ -16,6 +16,7 @@ through the orchestrator's ``task`` tool:
 Existing star/acrylic builders are imported read-only and never modified.
 """
 
+import asyncio
 from typing import Any, Dict, List
 
 import structlog
@@ -27,7 +28,12 @@ from langchain.agents.middleware import TodoListMiddleware
 from langchain_core.runnables import Runnable
 from langchain_quickjs import CodeInterpreterMiddleware
 
+from core.agent_backend import (
+    build_workspace_filesystem_backend,
+    specialist_wants_persistent_workspace,
+)
 from core.interfaces import TopologyBuilder
+from core.metro import ensure_metro_running, ensure_watcher_running
 from core.middleware.human_interaction import HumanInteractionMiddleware
 from core.middleware.structured_output import (
     build_tool_strategy,
@@ -293,6 +299,34 @@ class CompositeTopologyBuilder(TopologyBuilder):
         Specialists get ``checkpointer=None`` so only the orchestrator persists.
         """
         agent_name = specialist_config.get("name", node_id)
+
+        # Persistent-workspace opt-in (config.backend.persistent_workspace) —
+        # all decision logic lives in core/workspace/, this just delegates. Swaps
+        # this one specialist onto a real-disk backend instead of the
+        # DB-backed default; every other specialist is untouched.
+        if specialist_wants_persistent_workspace(specialist_config):
+            backend = build_workspace_filesystem_backend()
+            composite_backend = None
+            # No FilesystemPermission rules: the sandbox pod is the security
+            # boundary (ephemeral, per-session, default-deny NetworkPolicy),
+            # not this tool-layer ACL — which anything the agent runs through
+            # run_tool/npm bypasses outright (npm postinstall executes
+            # arbitrary code). A deny rule here is also actively harmful:
+            # deepagents checks glob's permission against "/" when no path
+            # argument is given, and "/workspace/**" does not match bare
+            # "/workspace", so a catch-all deny breaks ordinary ls/glob while
+            # dotfile paths like /workspace/.builder/** slip past it anyway
+            # (wcmatch's ** skips dotfiles without DOTGLOB) — verified
+            # against a live pod.
+            # Attempt Metro/HMR supervision every turn (this function runs
+            # fresh on each one, via _build_graph()) — idempotent no-ops
+            # once Metro/the watcher are already up, or if no Expo project
+            # has been scaffolded into the workspace yet.
+            try:
+                asyncio.create_task(ensure_metro_running())
+                ensure_watcher_running()
+            except RuntimeError:
+                logger.debug("metro_supervision_skipped_no_event_loop")
 
         # Build nested subagent specs (if any)
         nested_subagent_specs: List[Any] = []

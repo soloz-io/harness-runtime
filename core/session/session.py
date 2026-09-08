@@ -8,23 +8,28 @@ Thin orchestrator that delegates to focused sub-modules:
 - ``execution``: graph construction, input preparation, turn helpers
 """
 
+import asyncio
 from typing import Any, Optional
 
 import structlog
 
+from core.agent_backend import is_persistent_workspace_enabled
 from core.event_publisher import EventPublisher
 from core.executor import ExecutionManager
+from core.metro import ensure_metro_running, ensure_watcher_running
 from core.session.backends import build_artifact_backend
 from core.session.config import AgentConfig, extract_agent_config, persist_system_prompt
 from core.session.execution import (
     build_graph,
     consume_resume,
     initialize_tool_registry,
+    inline_object_attachments,
     prepare_turn_input,
 )
 from core.session.skill_paths import normalize_agent_definition
 from core.session.skills import SkillsManager
 from core.session.tools import ToolsManager
+from core.workspace_context import set_active_context
 
 logger = structlog.get_logger(__name__)
 
@@ -55,6 +60,30 @@ class Session:
 
         if not workspace_id:
             raise ValueError("workspace_id is required")
+
+        # The workspace arrives ready. Nothing to prepare here.
+        #
+        # This used to call ensure_workspace_repo() to git-init /workspace, and
+        # before that restore_workspace_from_s3() to populate it. Both are gone:
+        # the platform's workspace-sync sidecar mounts the workspace before this
+        # process starts (zero-ops ADR-052 §14.2), and git is no longer the
+        # source of truth for its contents.
+        #
+        # The harness now has no knowledge of how /workspace came to exist —
+        # which is the whole point of the split (waypoint ADR-036 §10). It reads
+        # and writes a directory.
+        if is_persistent_workspace_enabled(self.agent_definition):
+            set_active_context(
+                workspace_id, app_id, self.session_id, getattr(execution_manager, "_pool", None)
+            )
+            try:
+                asyncio.create_task(ensure_metro_running())
+                ensure_watcher_running()
+            except RuntimeError:
+                # No running event loop (e.g. constructed outside an async
+                # context, such as a sync test) — Metro/HMR is best-effort
+                # infrastructure, not a hard dependency of session creation.
+                logger.debug("metro_supervision_skipped_no_event_loop")
 
         # 1. Agent configuration
         cfg: AgentConfig = extract_agent_config(self.agent_definition)
@@ -92,12 +121,17 @@ class Session:
         self.resume_payload = resume_payload
 
     async def async_run_turn(
-        self, user_content: str = "", publisher: Optional[EventPublisher] = None, role: str = "user"
+        self,
+        user_content: str = "",
+        publisher: Optional[EventPublisher] = None,
+        role: str = "user",
+        attachments: Optional[list[dict[str, Any]]] = None,
     ) -> str:
         self._ensure_initialized()
         self.turns += 1
 
-        payload = prepare_turn_input(self.base_payload, user_content, role)
+        attachments = await inline_object_attachments(attachments)
+        payload = prepare_turn_input(self.base_payload, user_content, role, attachments)
         graph = self._build_graph()
         resume = consume_resume(self)
 
@@ -113,6 +147,19 @@ class Session:
             workspace_id=self.workspace_id,
             app_id=self.app_id,
         )
+
+        # No checkpoint call here, deliberately.
+        #
+        # Workspace durability is the platform's, end to end (ADR-052 §14): the
+        # PVC holds the live tree and the workspace-sync sidecar snapshots it on
+        # its own schedule and at teardown. A turn-boundary trigger from this
+        # process would mean the agent runtime knows a persistence layer exists,
+        # which is the coupling the whole split exists to remove — and it buys
+        # nothing durability-wise, because the periodic and teardown snapshots
+        # already bound what a crash can lose.
+        #
+        # Semantic, user-addressable history is git, which the agent DOES own
+        # and which lives on the volume like any other file.
         return result
 
     def run_turn(self, user_content: str = "", role: str = "user") -> str:

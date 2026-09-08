@@ -6,6 +6,7 @@ api/main.py
 api/publisher.py
 api/routers/__init__.py
 api/routers/health.py
+api/routers/preview.py
 api/routers/sessions.py
 core/__init__.py
 core/ask_user.py
@@ -28,6 +29,7 @@ core/state_schema_builder.py
 core/tool_loader.py
 core/tool_registry.py
 core/types.py
+core/workspace_context.py
 core/backends/__init__.py
 core/backends/artifact.py
 core/handlers/__init__.py
@@ -39,6 +41,11 @@ core/handlers/subagent_lifecycle_handler.py
 core/handlers/subagent_message_handler.py
 core/handlers/subagent_tools_handler.py
 core/handlers/subagent_values_handler.py
+core/metro/__init__.py
+core/metro/checkpoint_trigger.py
+core/metro/config.py
+core/metro/supervisor.py
+core/metro/watcher.py
 core/middleware/__init__.py
 core/middleware/custom_tool_middleware.py
 core/middleware/github_middleware.py
@@ -46,8 +53,17 @@ core/middleware/human_interaction.py
 core/middleware/rubric_middleware.py
 core/middleware/shell_middleware.py
 core/middleware/structured_output.py
+core/middleware/url_fetch_middleware.py
 core/publishers/__init__.py
 core/publishers/interfaces.py
+core/s3/__init__.py
+core/s3/backend.py
+core/s3/broker_client.py
+core/s3/checkpoint_record.py
+core/s3/config.py
+core/s3/node_modules_cache.py
+core/s3/restore.py
+core/s3/sync.py
 core/session/__init__.py
 core/session/backends.py
 core/session/config.py
