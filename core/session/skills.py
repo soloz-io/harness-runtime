@@ -21,6 +21,20 @@ ENV_IMAGE_DIR = "HARNESS_IMAGE_DIR"
 ENV_SKILLS_RUNTIME_BASE = "HARNESS_SKILLS_RUNTIME_BASE"
 DEFAULT_SKILLS_RUNTIME_BASE = "/workspace/.builder"
 
+# Never useful to copy into a session's isolated skill tree, and each has
+# bitten this exact copy before: `.ruff_cache`/`__pycache__` are linter/
+# interpreter caches that can carry restrictive owner-only permissions from
+# whatever local checkout built the image — a stray `.ruff_cache` baked in
+# by an ordinary `ruff check` run during development crashed EVERY session
+# on this pod with `PermissionError` deep inside `shutil.copytree`, because
+# the whole tree was copied unfiltered and one unreadable file aborted the
+# entire operation. `.git`/`node_modules` are the same class of accident
+# waiting to happen — large, irrelevant to what a skill actually needs at
+# runtime, and never something this copy should depend on being readable.
+_SKILL_COPY_IGNORE = shutil.ignore_patterns(
+    ".ruff_cache", "__pycache__", ".git", "node_modules", ".pytest_cache", "*.egg-info"
+)
+
 
 def _skills_runtime_base() -> Path:
     return Path(os.environ.get(ENV_SKILLS_RUNTIME_BASE, DEFAULT_SKILLS_RUNTIME_BASE))
@@ -150,7 +164,7 @@ class SkillsManager:
                     continue
                 tmp = Path(tempfile.mkdtemp(prefix=f"skill-{skill_name}-"))
                 dest = tmp / skill_name
-                shutil.copytree(str(skill_dir), str(dest))
+                shutil.copytree(str(skill_dir), str(dest), ignore=_SKILL_COPY_IGNORE)
                 tmp_dirs[skill_name] = tmp
                 logger.info("skill_isolated", skill=skill_name, node=agent_id)
         return tmp_dirs

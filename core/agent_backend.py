@@ -4,7 +4,7 @@ Which filesystem backend a specialist gets.
 A specialist normally gets the DB-backed ``SessionArtifactBackend``, which never
 touches real disk and therefore cannot produce files a process like Metro could
 serve. One whose node sets ``config.backend.persistent_workspace`` gets
-``deepagents``' real-disk ``FilesystemBackend`` instead.
+``deepagents``' ``LocalShellBackend`` (real-disk + shell execution) instead.
 
 This is a BACKEND choice and nothing more. Whether those files outlive the pod —
 a volume, an object store, neither — is the platform's concern and is not
@@ -52,6 +52,6 @@ def build_workspace_filesystem_backend(root_dir: str = "/") -> object:
     once everything is trivially under the root; the real containment for this
     specialist is the ACL layer in ``subagent_builder``, not this guard.
     """
-    from deepagents.backends.filesystem import FilesystemBackend
+    from deepagents.backends.local_shell import LocalShellBackend
 
-    return FilesystemBackend(root_dir=root_dir, virtual_mode=True)
+    return LocalShellBackend(root_dir=root_dir, virtual_mode=True)

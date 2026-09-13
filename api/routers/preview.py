@@ -1,43 +1,49 @@
 """
 Preview streaming — ADR-036 §7 (enterprise-hardening plan).
 
-Four routes, all behind the same auth check (§2 of the hardening plan —
-reuses ``WAYPOINT_INTERNAL_TOKEN``, the SDK's own ``/internal/*`` convention,
-rather than inventing a new one):
+All routes behind the same auth check (§2 of the hardening plan — reuses
+``WAYPOINT_INTERNAL_TOKEN``, the SDK's own ``/internal/*`` convention, rather
+than inventing a new one):
 
 - HTTP proxy to Metro's own server (``localhost:8081``) — allowlisted (§3),
   not a true catch-all, since Metro's dev server exposes more than bundle
   serving and was never designed to be reachable outside a developer's own
   machine.
-- ``GET /routes`` — the route manifest, read from the compiled ``preview.json``. Ported
-  near-verbatim from opencode's own
-  ``opencode_event_bridge/preview_manifest.py`` (same scan logic, same
-  runtime-report-takes-precedence behavior), adapted to this session's
-  ``workspace_context``/``/workspace`` conventions instead of opencode's
-  ``OPENCODE_DIRECTORY``/``APP_ID`` globals.
+- ``POST /wake`` / ``GET /wake/status`` — start this sandbox's Metro and
+  report where that got to.
 - ``/hot`` / ``/message`` WebSocket relay to Metro's own sockets — the
   actual HMR channel. Distinct from ``core/metro/watcher.py``'s outbound-
   only connection (that one exists purely to trigger checkpoints; this one
   is what the browser's preview actually uses).
+
+There is deliberately no route serving the app's flow. Nothing in the
+workspace describes it: the canvas reads the agent's own source through
+``/workspace/files`` and extracts the graph itself (waypoint ADR-039). The
+``GET /routes`` endpoint that served a compiled ``preview.json`` is gone with
+the compile step that wrote it — an endpoint whose file no longer has a
+producer answers "empty graph" forever, which reads as a broken app rather
+than as a removed feature.
 """
 
 import json
 import os
-import re
-from typing import Any, Optional
+from typing import Optional
 
 import structlog
 from fastapi import APIRouter, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 
 from core.metro.config import METRO_URL
-from core.metro.supervisor import ensure_metro_running, wait_for_metro_ready
+from core.metro.supervisor import (
+    ensure_metro_running,
+    metro_is_running,
+    node_modules_install_in_progress,
+    wait_for_metro_ready,
+)
 from core.workspace_context import get_active_app_id
 
 logger = structlog.get_logger(__name__)
 
 router = APIRouter(tags=["preview"])
-
-ROOT_DIR = "/workspace"
 
 
 # ── Auth (§2: reuse WAYPOINT_INTERNAL_TOKEN, the SDK's own convention) ─────
@@ -97,164 +103,77 @@ def _path_allowed(path: str) -> bool:
     return path.endswith(_ALLOWED_SUFFIXES)
 
 
-# ── Route manifest (ported from opencode's preview_manifest.py) ───────────
+@router.post("/wake")
+async def wake(request: Request) -> dict:
+    """Make this sandbox's preview serveable, and say whether it is.
 
-_NAV_CALL_RE = re.compile(
-    r"(?:router\.(?:push|navigate|replace)|(?:navigation\.)?(?:navigate|push|replace))\s*\(\s*['\"`]([^'\"`]+)['\"`]"
-)
-_LINK_HREF_RE = re.compile(r"(?:<Link|href=|Link\s+to=|to=)\s*['\"`]([^'\"`]+)['\"`]")
-_ROUTER_NON_ROUTE_RE = re.compile(r"^(?:_|\+)")
+    THE single entry point for "start the preview". Everything that wants a
+    running preview calls this — the Wake control in the UI goes SDK ->
+    ensureSandbox -> here, and the in-pod triggers below call the same
+    ``ensure_metro_running()`` this does.
 
+    It exists because provisioning a pod and having a preview are not the same
+    thing, and until now only the pod half had a caller. Metro was started
+    exclusively as a side effect of four unrelated events — a session being
+    created, an agent turn starting, a preview websocket connecting, a preview
+    HTTP request arriving — so a user who provisioned a sandbox and then simply
+    waited got a pod that never served anything. Waking is now something that
+    can be *asked for* rather than only stumbled into.
 
-def _load_compiled_route_manifest(app_id: Optional[str]) -> Optional[dict]:
-    """Read the route manifest straight from ``/workspace/preview.json`` —
-    the compiled, authoritative artifact ``compile_check_cli`` generates
-    from the agent's own ``*.preview.md`` manifests, the same source
-    ``App.tsx``'s ``ScreenRoute`` switch is written from.
+    ``ensure_metro_running()`` is idempotent and repairs as well as starts: if
+    ``node_modules/.bin/expo`` is missing (a restored workspace never gets its
+    symlinks back) it kicks off the reinstall that recreates it. So calling
+    this on a healthy sandbox costs a discovery check, and calling it on a
+    broken one is the fix.
 
-    This is now the ONLY source. It replaced a filename scanner that could
-    only *guess* a route id from a component filename — a screen named
-    ``Screen1.tsx`` gives no way to know whether the manifest called the
-    route ``screen1``, ``screen-1``, or anything else — and, later, a cache
-    of what the app POSTed about itself on mount. See ``routes()`` for why
-    that cache had to go rather than be repaired.
-
-    Reading the compiled JSON sidesteps guessing entirely: a
-    ``devicePreview`` node's own ``data.route`` **is** the exact path the
-    app's ``ScreenRoute`` type derives its values from (both strip the
-    leading ``/`` from the same string), so using it directly can't drift
-    from what the app will actually match against — regardless of what
-    convention the agent chose for its manifest ids.
-
-    Returns ``None`` (not an empty manifest) when ``preview.json`` doesn't
-    exist yet or fails to parse, so the caller knows to fall back rather
-    than treating "no compiled preview yet" the same as "compiled with
-    zero screens".
-    """
-    path = os.path.join(ROOT_DIR, "preview.json")
-    try:
-        with open(path, "r", encoding="utf-8") as fh:
-            compiled = json.load(fh)
-    except (OSError, json.JSONDecodeError):
-        return None
-
-    nodes = compiled.get("nodes")
-    if not isinstance(nodes, list):
-        return None
-
-    routes: list[dict] = []
-    node_kind_by_id: dict[str, str] = {}
-    for node in nodes:
-        if not isinstance(node, dict):
-            continue
-        node_kind_by_id[node.get("id", "")] = node.get("type", "")
-        if node.get("type") != "devicePreview":
-            continue
-        data = node.get("data") or {}
-        route_path = data.get("route")
-        if not isinstance(route_path, str) or not route_path.startswith("/"):
-            continue
-        routes.append(
-            {
-                "id": route_path.lstrip("/") or "home",
-                "path": route_path,
-                "label": data.get("label") or route_path,
-                "isInitial": bool(data.get("isInitial")),
-                "_node_id": node.get("id"),
-            }
-        )
-    if not routes:
-        return None
-
-    route_id_by_node_id = {r["_node_id"]: r["id"] for r in routes}
-    for r in routes:
-        r.pop("_node_id", None)
-
-    # A link is a devicePreview -> transition -> devicePreview chain (the
-    # PTP rule from the topology reference). A transition can have MORE
-    # THAN ONE devicePreview source — topology.md §6.A documents this as
-    # the supported "fan-in" pattern (several screens converging on one
-    # shared transition, e.g. three sign-in paths all reaching Home) — and
-    # more than one devicePreview target (§6.B "fan-out", conditional
-    # branching). Collect every source per transition, not just one, or a
-    # generated app using fan-in loses all but the last-processed source
-    # edge here even though the compiled graph has all of them.
-    edges = compiled.get("edges")
-    links: list[dict] = []
-    if isinstance(edges, list):
-        transition_sources: dict[str, list[tuple[str, Optional[str]]]] = {}
-        for edge in edges:
-            if not isinstance(edge, dict):
-                continue
-            source, target = edge.get("source"), edge.get("target")
-            if (
-                node_kind_by_id.get(source) == "devicePreview"
-                and node_kind_by_id.get(target) == "transition"
-            ):
-                transition_sources.setdefault(target, []).append((source, edge.get("sourceHandle")))
-        for edge in edges:
-            if not isinstance(edge, dict):
-                continue
-            source, target = edge.get("source"), edge.get("target")
-            if (
-                node_kind_by_id.get(source) != "transition"
-                or node_kind_by_id.get(target) != "devicePreview"
-            ):
-                continue
-            to_rid = route_id_by_node_id.get(target)
-            if not to_rid:
-                continue
-            for from_node_id, source_handle in transition_sources.get(source, []):
-                from_rid = route_id_by_node_id.get(from_node_id)
-                if not from_rid:
-                    continue
-                link: dict[str, Any] = {"fromRouteId": from_rid, "toRouteId": to_rid}
-                if source_handle:
-                    link["sourceHandle"] = source_handle
-                links.append(link)
-
-    return {"appId": app_id, "routes": routes, "links": links}
-
-
-@router.get("/routes")
-async def routes(request: Request) -> dict:
-    """The app's route manifest, from the compiled artifact and nowhere else.
-
-    ONE SOURCE, deliberately. This used to consult three, ordered worst-first:
-
-      1. ``_RUNTIME_MANIFESTS`` — what the app POSTed about itself on mount,
-         built by hand in ``previewBridge.ts``'s ``buildRouteManifest()``.
-      2. ``preview.json`` — generated by ``compile_check_cli`` from the agent's
-         own ``*.preview.md`` manifests.
-      3. a scan that guessed route ids from screen FILENAMES.
-
-    Each was added to fix the one below it, and none was removed when its
-    replacement landed. The least reliable — hand-written, unverified, cached
-    in memory with no invalidation — outranked the generated one.
-
-    That produced an unrecoverable state, observed live: the placeholder app
-    reported ``home`` and it was cached; the agent then replaced the screens and
-    recompiled, so ``preview.json`` said ``first-screen``; this endpoint kept
-    serving ``home``; the canvas passed ``?route=/home`` to the app; the app
-    threw on an unmatched route DURING RENDER — before the ``useEffect`` that
-    would have re-reported the real routes could run. The stale value caused the
-    crash, and the crash preserved the stale value.
-
-    ``preview.json`` cannot drift in that way: it derives each route id from the
-    ``devicePreview`` node's own ``data.route``, which is the same string the
-    app's ``ScreenRoute`` union is written from.
-
-    An absent or unparseable manifest returns an EMPTY one. "This app has not
-    compiled" is a real state and the canvas should show it, not a filename
-    guess that happens to render something.
+    Reports rather than raises. "Metro did not come up in time" is an ordinary
+    outcome on a cold start — the install alone can outlast any sane request
+    timeout — and the caller needs to distinguish it from "the sandbox is
+    unreachable", which a 5xx here would collapse into.
     """
     _require_auth_http(request)
-    app_id = get_active_app_id()
-    compiled = _load_compiled_route_manifest(app_id)
-    if compiled is not None:
-        return compiled
-    logger.info("preview_routes_not_compiled", app_id=app_id)
-    return {"appId": app_id, "routes": [], "links": []}
+
+    try:
+        await ensure_metro_running()
+    except Exception:
+        logger.warning("preview_wake_supervision_failed", exc_info=True)
+        return {"metroReady": False, "reason": "supervision-failed"}
+
+    ready = await wait_for_metro_ready()
+    logger.info("preview_wake", metro_ready=ready)
+    # `installing` distinguishes the two ways `ready` is false: a workspace
+    # whose dependencies are still being regenerated WILL come up on its own,
+    # and telling the user to retry would be wrong. Anything else will not.
+    return {
+        "metroReady": ready,
+        "reason": None
+        if ready
+        else ("installing" if node_modules_install_in_progress() else "not-ready"),
+    }
+
+
+@router.get("/wake/status")
+async def wake_status(request: Request) -> dict:
+    """Poll target for "is the preview serving yet".
+
+    Separate from POST /wake on purpose, and cheap on purpose: it starts
+    nothing and waits for nothing, so it is safe to call on a short interval.
+    POST /wake blocks for up to the Metro-ready timeout and can kick off a
+    multi-minute dependency install; polling THAT would stack supervision
+    passes and hold a connection open for the whole install.
+
+    So the contract is: POST /wake once to ask, then GET /wake/status until
+    ``metroReady``. The reasons are the same vocabulary both endpoints use, so
+    a caller does not have to translate between them.
+    """
+    _require_auth_http(request)
+    ready = metro_is_running()
+    return {
+        "metroReady": ready,
+        "reason": None
+        if ready
+        else ("installing" if node_modules_install_in_progress() else "not-ready"),
+    }
 
 
 # ── /hot and /message WebSocket relay to local Metro ───────────────────────
@@ -341,9 +260,9 @@ async def message(websocket: WebSocket) -> None:
 # ── HTTP proxy to Metro (§3: allowlisted, not a catch-all) ─────────────────
 #
 # Registered LAST, deliberately: FastAPI matches routes in registration
-# order, and "/{path:path}" matches literally any path — declared any
-# earlier in this file, it would shadow /routes above
-# before their own handlers ever ran.
+# order, and "/{path:path}" matches literally any path — declared any earlier
+# in this file, it would shadow /wake and the WebSocket relays above before
+# their own handlers ever ran.
 
 
 def _websocket_appid_patch_script(app_id: str) -> str:
@@ -368,20 +287,61 @@ def _websocket_appid_patch_script(app_id: str) -> str:
     `?appId=...` to exactly those two paths — appId comes from this
     server's own session state (`get_active_app_id()`), never anything the
     browser could fail to send.
+
+    The same patch also REPORTS Metro's HMR lifecycle to the canvas.
+
+    Metro's /hot socket carries an explicit rebuild lifecycle —
+    ``update-start`` / ``update`` / ``update-done`` / ``error`` (see
+    metro-runtime's HMRClient, which switches on exactly these). The canvas
+    needs it because the coding agent writes a feature one file at a time:
+    between the first write and the last, the app genuinely does not compile
+    (App.tsx referencing a screen that does not exist yet), and a preview
+    node that re-renders into that half-state looks like a crash rather than
+    like work in progress. Knowing a build is in flight lets the canvas hold
+    the last good frame and show a "building" indicator instead.
+
+    It is done HERE, in the injected script, rather than in the app's own
+    previewBridge for two reasons: this file already owns the /hot socket, so
+    there is one interception point instead of two; and it works for an app
+    whose sources predate the feature, which matters because an existing
+    workspace is only regenerated when the agent next rewrites it.
+
+    Deliberately observation-only — it forwards what Metro says and never
+    suppresses, delays, or synthesises a message. The socket behaves exactly
+    as it did unpatched; `onmessage` assignment and `addEventListener` both
+    still reach Metro's own client untouched.
     """
     return (
         "<script>(function(){"
         f"var appId={json.dumps(app_id)};"
         "if(!appId)return;"
         "var Native=window.WebSocket;"
+        # Report to the canvas. Same-origin (the canvas frames this page), so
+        # targetOrigin is the page's own origin rather than '*'.
+        "function report(kind,body){try{if(window.parent&&window.parent!==window){"
+        "window.parent.postMessage({type:'expo-app:bundle',phase:kind,body:body,appId:appId},"
+        "window.location.origin);}}catch(e){}}"
+        "function watchHmr(ws){"
+        "ws.addEventListener('message',function(ev){"
+        "var t;try{t=JSON.parse(String(ev.data)).type;}catch(e){return;}"
+        # heartbeat/bundle-registered are noise for this purpose; the four
+        # below are the whole lifecycle the canvas gates on.
+        "if(t==='update-start'||t==='update-done'||t==='error'){report(t);}"
+        "});"
+        "ws.addEventListener('close',function(){report('disconnected');});"
+        "}"
         "function Patched(url,protocols){"
+        "var isHot=false;"
         "try{"
         "var u=new URL(url,window.location.href);"
-        "if((u.pathname==='/hot'||u.pathname==='/message')&&!u.searchParams.has('appId')){"
+        "isHot=(u.pathname==='/hot');"
+        "if((isHot||u.pathname==='/message')&&!u.searchParams.has('appId')){"
         "u.searchParams.set('appId',appId);url=u.toString();"
         "}"
         "}catch(e){}"
-        "return Reflect.construct(Native,protocols===undefined?[url]:[url,protocols]);"
+        "var ws=Reflect.construct(Native,protocols===undefined?[url]:[url,protocols]);"
+        "if(isHot){try{watchHmr(ws);}catch(e){}}"
+        "return ws;"
         "}"
         "Patched.prototype=Native.prototype;"
         "Patched.CONNECTING=Native.CONNECTING;Patched.OPEN=Native.OPEN;"
