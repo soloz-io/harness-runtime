@@ -74,6 +74,41 @@ def write_chat_messages(
     try:
         with pool.connection() as conn:
             with conn.cursor() as cur:
+                # Continue the session's existing numbering, rather than trusting
+                # the caller's in-memory count.
+                #
+                # `offset` is the handler's own `values_messages_count`, which
+                # lives in ExecutionState and therefore starts again at 0 every
+                # time a Session is constructed — on any sandbox restart, and on
+                # every checkpoint restore (which deliberately discards the
+                # in-memory session). The result is a `sequence` that restarts
+                # mid-conversation: sequence 28 appears five times in one real
+                # session here.
+                #
+                # That matters because sequence is not decoration. The restore
+                # endpoint truncates with `sequence > keepUpToSequence`, so a
+                # repeated numbering makes "delete everything after this message"
+                # delete messages from unrelated earlier turns that happen to
+                # carry a higher number.
+                #
+                # The database already knows the answer, and it is the only
+                # participant that survives a restart. Read inside the same
+                # connection as the inserts that follow so nothing can interleave
+                # between the two: within a session, writes are sequential (the
+                # executor dispatches events one at a time), and the ON CONFLICT
+                # below still dedupes by message id regardless.
+                cur.execute(
+                    "SELECT COALESCE(MAX(sequence), -1) + 1 FROM chat_messages WHERE session_id = %s",
+                    (session_id,),
+                )
+                row = cur.fetchone()
+                base = row[0] if row and row[0] is not None else 0
+                # Keep the caller's offset when it is already ahead — a batch
+                # written before any row exists (base 0) still numbers from where
+                # the caller thinks it is, preserving order within that batch.
+                if offset > base:
+                    base = offset
+
                 for i, msg in enumerate(messages):
                     role = ROLE_MAP.get(msg.get("type", ""), "assistant")
                     msg_id = uuid.uuid4().hex
@@ -90,7 +125,7 @@ def write_chat_messages(
                             role,
                             Jsonb(msg.get("content", "")),
                             Jsonb(msg),
-                            offset + i,
+                            base + i,
                             source,
                             # The checkpoint this batch was written at, so the
                             # UI can offer "restore to this message" as an

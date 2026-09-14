@@ -8,7 +8,9 @@ api/routers/__init__.py
 api/routers/health.py
 api/routers/preview.py
 api/routers/sessions.py
+api/routers/workspace_files.py
 core/__init__.py
+core/agent_backend.py
 core/ask_user.py
 core/builder.py
 core/checkpoint_restore.py
@@ -23,6 +25,7 @@ core/message_writer.py
 core/model_factory.py
 core/model_identifier.py
 core/node_compiler.py
+core/pending_restore.py
 core/services.py
 core/skill_router.py
 core/state_schema_builder.py
@@ -56,14 +59,6 @@ core/middleware/structured_output.py
 core/middleware/url_fetch_middleware.py
 core/publishers/__init__.py
 core/publishers/interfaces.py
-core/s3/__init__.py
-core/s3/backend.py
-core/s3/broker_client.py
-core/s3/checkpoint_record.py
-core/s3/config.py
-core/s3/node_modules_cache.py
-core/s3/restore.py
-core/s3/sync.py
 core/session/__init__.py
 core/session/backends.py
 core/session/config.py
@@ -95,3 +90,4 @@ tests/test_checkpoint_restore.py
 tests/test_hybrid_topology.py
 tests/test_skills_image_mode.py
 tests/test_tools_image_mode.py
+tests/test_workspace_files.py

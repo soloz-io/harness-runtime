@@ -348,6 +348,23 @@ async def handle_message(session_id: str, body: dict[str, Any]) -> dict[str, Any
         # Invalidate in-memory session so next turn starts fresh from restored checkpoint
         session_store.pop(session_id, None)
 
+        # A restore with nothing to run is finished here.
+        #
+        # Falling through would reach the session-construction branch below and
+        # build a Session from `agent_definition or {}` — and the SDK's restore
+        # call deliberately sends no agent definition, because it is not asking
+        # for a turn. That raised "No nodes found in agent definition" from
+        # extract_agent_config and surfaced as a 500 on an operation that had
+        # already SUCCEEDED: the checkpoint was rewound, then the response said
+        # it failed, so the caller never ran the workspace half.
+        #
+        # There is also nothing to construct. The line above just discarded the
+        # session on purpose; the next real message rebuilds it from the
+        # checkpoint this call restored.
+        if not message and not resume_payload:
+            logger.info("checkpoint_restored_no_turn", session_id=session_id)
+            return {"success": True}
+
     # No workspace restore here, deliberately.
     #
     # This used to accept `restore_git_sha` and check the workspace out to that
@@ -407,6 +424,26 @@ async def handle_message(session_id: str, body: dict[str, Any]) -> dict[str, Any
             )
         else:
             return {"success": True}
+
+    # An undo recorded before this pod existed (ADR-035).
+    #
+    # Checked on every message rather than once per pod: the pin is normally
+    # written while no sandbox is running, but a recycle that failed leaves a
+    # live pod with a pin waiting, and that turn must still start from the
+    # rewound thread. One indexed lookup, and it must happen BEFORE any session
+    # is built or resumed, since a Session constructed from the old head would
+    # carry exactly the messages the undo discarded.
+    from core.pending_restore import apply_pending_agent_restore
+
+    _checkpointer = execution_manager._async_checkpointer or execution_manager.checkpointer
+    try:
+        if await apply_pending_agent_restore(
+            _checkpointer, getattr(execution_manager, "_pool", None), session_id
+        ):
+            # Drop any in-memory session: it was built from the pre-undo head.
+            session_store.pop(session_id, None)
+    except Exception:
+        logger.error("pending_agent_restore_failed", session_id=session_id, exc_info=True)
 
     if session_id in session_store:
         state = session_store[session_id]
@@ -537,7 +574,11 @@ async def stream_events(
                             seq = parsed.get("seq", -1)
                             ptype = parsed.get("type", "unknown")
 
-                            logger.info(
+                            # DEBUG: one line per event DELIVERED, on top of
+                            # one per event published and two per event
+                            # processed. The same chunk was being narrated four
+                            # times before it reached the browser.
+                            logger.debug(
                                 "sse_yield",
                                 session_id=resolved_id,
                                 type=ptype,

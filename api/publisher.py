@@ -54,7 +54,10 @@ class SSEEventPublisher(EventPublisher):
         try:
             r = get_redis_client()
             result_id = r.xadd(self._stream_key, {"data": json.dumps(data, default=str)})
-            logger.info(
+            # DEBUG: one line per published event, mirroring the executor's
+            # per-event trace. The stream itself is the record of what was
+            # published; this only says that the write happened.
+            logger.debug(
                 "publisher_write",
                 stream_key=self._stream_key,
                 event_type=data.get("type"),
@@ -364,17 +367,24 @@ class SSEEventPublisher(EventPublisher):
         self._block_started = False
         # Emit an explicit result frame so SSE consumers can detect
         # turn completion without waiting for the stream to close.
-        self._write(
-            {
-                "type": "result",
-                "subtype": subtype,
-                "session_id": session_id,
-                "duration_ms": duration_ms,
-                "is_error": is_error,
-                "num_turns": num_turns,
-                "result": result,
-            }
-        )
+        frame: dict[str, Any] = {
+            "type": "result",
+            "subtype": subtype,
+            "session_id": session_id,
+            "duration_ms": duration_ms,
+            "is_error": is_error,
+            "num_turns": num_turns,
+            "result": result,
+        }
+        # The interrupt payload carries the ask_user questions/options. It is the
+        # ONLY place they reach the client: RootValuesHandler stops the turn on
+        # __interrupt__ before the values channel publishes the assistant message
+        # that holds the tool call. Dropping it here (as this did) leaves the UI
+        # with the agent's preamble text and no question to answer, so the turn
+        # silently stalls.
+        if interrupt is not None:
+            frame["interrupt"] = interrupt
+        self._write(frame)
 
     def publish_control_response(
         self, *, request_id: str, subtype: str = "success", **extra: Any

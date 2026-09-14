@@ -178,6 +178,88 @@ class ExecutionManager:
             return Command(resume=resume_payload)
         return input_payload
 
+    @staticmethod
+    def _latest_user_text(input_payload: dict[str, Any]) -> str:
+        """Plain text of the newest user message in *input_payload*, or ""."""
+        messages = input_payload.get("messages")
+        if not isinstance(messages, list):
+            return ""
+        for message in reversed(messages):
+            if not isinstance(message, dict) or message.get("role") != "user":
+                continue
+            content = message.get("content")
+            if isinstance(content, str):
+                return content.strip()
+            # Multimodal content: concatenate the text blocks, skipping images.
+            if isinstance(content, list):
+                parts: list[str] = []
+                for block in content:
+                    if not isinstance(block, dict) or block.get("type") != "text":
+                        continue
+                    text = block.get("text")
+                    if isinstance(text, str) and text:
+                        parts.append(text)
+                return " ".join(parts).strip()
+            return ""
+        return ""
+
+    async def _resume_from_pending_interrupt(
+        self,
+        input_payload: dict[str, Any],
+        session_id: str,
+    ) -> Optional[dict[str, Any]]:
+        """Turn a plain user message into a resume decision when the graph is paused.
+
+        Returns a ``decisions`` payload shaped exactly like the one the client
+        sends for an explicit answer, or ``None`` when the graph is not parked on
+        an interrupt (the ordinary case) — in which case the caller proceeds with
+        a normal turn.
+
+        Deliberately only handles the ``respond`` decision. Approve/reject/edit
+        carry intent that a free-text message does not express, and guessing at
+        one would act on the user's behalf.
+        """
+        checkpointer = self._async_checkpointer or self.checkpointer
+        if checkpointer is None:
+            return None
+
+        text = self._latest_user_text(input_payload)
+        if not text:
+            return None
+
+        try:
+            config: RunnableConfig = {"configurable": {"thread_id": session_id}}
+            if hasattr(checkpointer, "aget_tuple"):
+                cpt = await checkpointer.aget_tuple(config)
+            else:
+                cpt = checkpointer.get_tuple(config)
+        except Exception as e:
+            logger.warning("pending_interrupt_check_failed", session_id=session_id, error=str(e))
+            return None
+
+        if cpt is None:
+            return None
+
+        # A graph with no pending tasks reached END — nothing to resume.
+        next_tasks = (getattr(cpt, "metadata", None) or {}).get("next", [])
+        if not next_tasks:
+            return None
+
+        interrupts = getattr(cpt, "interrupts", None)
+        if not interrupts:
+            # Older checkpoint tuples expose pending interrupts on the tasks.
+            tasks = getattr(cpt, "pending_writes", None) or []
+            interrupts = [t for t in tasks if getattr(t, "value", None) is not None]
+        if not interrupts:
+            return None
+
+        logger.info(
+            "plain_message_resumed_pending_interrupt",
+            session_id=session_id,
+            text_preview=text[:120],
+        )
+        return {"decisions": [{"type": "respond", "message": text}]}
+
     async def _build_resume_input(
         self,
         input_payload: dict[str, Any],
@@ -191,7 +273,20 @@ class ExecutionManager:
         ``Command(update=..., resume=...)``.
         """
         if resume_payload is None:
-            return input_payload
+            # The graph may be parked on a human-interaction interrupt (ask_user)
+            # that this message is the answer to. The client normally recognises
+            # that and sends an explicit resume_payload, but it cannot when its
+            # view of the conversation is stale — after a reload, on a second
+            # tab, or when the prompt never rendered.
+            #
+            # Without this, such a message starts a fresh turn and the interrupt
+            # is abandoned rather than answered. deepagents' PatchToolCallsMiddleware
+            # then rewrites the unanswered call as "was cancelled - another message
+            # came in before it could be completed", which the agent reports to the
+            # user as an interruption it cannot explain.
+            resume_payload = await self._resume_from_pending_interrupt(input_payload, session_id)
+            if resume_payload is None:
+                return input_payload
 
         from langgraph.types import Command
 
@@ -344,7 +439,11 @@ class ExecutionManager:
                         traceback=traceback.format_exc(),
                     )
                     raise
-                logger.info(
+                # DEBUG for the same reason as v3_raw_event above: one line per
+                # event, and this one also carries `result` and the data type,
+                # so it is the larger of the pair. The two together were two
+                # lines for every chunk the model produced.
+                logger.debug(
                     "v3_event_dispatch",
                     method=event.method,
                     ns=event.namespace,
@@ -495,9 +594,21 @@ class ExecutionManager:
             run = await graph.astream_events(stream_input, config, version="v3")
             async for raw_event in run:
                 if not isinstance(raw_event, dict):
+                    # Kept at INFO: a non-dict event is unexpected and rare,
+                    # so it carries information rather than volume.
                     logger.info("v3_raw_event_skipped", type=str(type(raw_event)))
                     continue
-                logger.info(
+                # DEBUG, not info.
+                #
+                # One line per event from `astream_events`, which is one per
+                # streamed chunk — thousands per turn. Measured at ~10 MiB of
+                # pod log in under seven minutes, which rotated away the
+                # evidence anyone was actually looking for: the sandbox logs
+                # that explain a failed build or a dead Metro were gone before
+                # they could be read. A trace of every event is a debugging
+                # tool, not an operational record, so it is available on
+                # request and silent by default.
+                logger.debug(
                     "v3_raw_event",
                     method=raw_event.get("method"),
                     ns=raw_event.get("params", {}).get("namespace"),

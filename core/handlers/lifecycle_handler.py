@@ -36,6 +36,20 @@ class LifecycleHandler(EventHandler):
         data = event.data
         sub_event = data.get("event")
 
+        # --- Interrupted → record it; the values handler owns publishing ---
+        #
+        # A root-level `interrupted` lifecycle event means the graph paused on a
+        # HumanInTheLoop tool (ask_user). Falling through without a branch — the
+        # previous behaviour — left no trace of it anywhere, which made a stalled
+        # turn indistinguishable from a finished one when reading logs. The event
+        # itself carries no interrupt payload, so it is deliberately NOT published
+        # here: RootValuesHandler emits the result frame with the questions once
+        # it sees `__interrupt__` on the values channel.
+        if sub_event == "interrupted" and not data.get("namespace"):
+            state.interrupted = True
+            logger.info("root_graph_interrupted", session_id=session_id)
+            return True
+
         # --- Started → record namespace -> tool_call_id mapping ---
         if sub_event == "started":
             ns_list = data.get("namespace")

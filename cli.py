@@ -25,7 +25,24 @@ if _log_level and _log_file:
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
+# Level filtering, without which the level on a call site is decorative.
+#
+# structlog's DEFAULT BoundLogger does not filter: `logger.debug(...)` is
+# formatted and written exactly like `logger.info(...)`, so demoting a noisy
+# call site changes nothing at all. `make_filtering_bound_logger` returns a
+# no-op for anything below the threshold, so a dropped line costs neither
+# formatting nor I/O.
+#
+# This is what makes the per-event traces in the executor, the publisher and
+# the SSE relay free when they are not wanted. Those four lines — one per
+# event processed, dispatched, published and delivered — were measured at
+# ~10 MiB of pod log in under seven minutes, which rotated away the sandbox
+# evidence that explains a failed build or a dead Metro before anyone could
+# read it. HARNESS_LOG_LEVEL=debug brings them back for one session.
+_structlog_level = getattr(logging, (_log_level or "INFO").upper(), logging.INFO)
+
 structlog.configure(
+    wrapper_class=structlog.make_filtering_bound_logger(_structlog_level),
     logger_factory=structlog.PrintLoggerFactory(sys.stderr),
     cache_logger_on_first_use=True,
 )

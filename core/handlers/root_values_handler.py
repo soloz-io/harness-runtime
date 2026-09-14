@@ -45,20 +45,24 @@ class RootValuesHandler(EventHandler):
         if not isinstance(data, dict):
             return True
 
-        # ---- Interrupt detection ----
-        interrupt_val = data.get("__interrupt__")
-        if interrupt_val is not None:
-            self._publish_interrupt(
-                interrupt_val, state, publisher, session_id, start_time, num_turns
-            )
-            return False
-
         # ---- Structured response / files ----
         if "structured_response" in data:
             state.last_structured_response = data["structured_response"]
         state_files = data.get("files")
         if state_files:
             state.last_files.update(state_files)
+
+        # ---- Interrupt detection ----
+        #
+        # The message flush below runs FIRST, before the interrupt is published
+        # and the turn stops. The interrupting assistant message is the one
+        # carrying the `ask_user` tool call, so returning early here (as this
+        # used to) meant that message was never written to chat_messages and
+        # never published on the values channel: the UI saw the agent's preamble
+        # text, no question, and a turn that simply went quiet. The client's
+        # pending-interaction lookup keys off that tool call, so without it no
+        # prompt can ever render.
+        interrupt_val = data.get("__interrupt__")
 
         # ---- Messages for values channel ----
         msgs = data.get("messages", [])
@@ -101,6 +105,12 @@ class RootValuesHandler(EventHandler):
                     messages=serialized,
                     files=state.last_files or None,
                 )
+
+        if interrupt_val is not None:
+            self._publish_interrupt(
+                interrupt_val, state, publisher, session_id, start_time, num_turns
+            )
+            return False
 
         return True
 
