@@ -51,16 +51,16 @@ class StarTopologyBuilder(TopologyBuilder):
         if not nodes:
             raise ValueError("Agent definition must contain at least one node")
 
-        # Auto-construct SessionArtifactBackend when backend not pre-built but DB params available
+        # Auto-construct DBBackend when backend not pre-built but DB params available
         if backend is None and workspace_id and session_id and db_pool is not None:
-            from core.backends.artifact import SessionArtifactBackend
+            from core.backends.db import DBBackend
 
-            backend = SessionArtifactBackend(
+            backend = DBBackend(
                 workspace_id=workspace_id,
                 session_id=session_id,
                 pool=db_pool,
             )
-            logger.info("session_artifact_backend_auto_constructed")
+            logger.info("db_backend_auto_constructed")
 
         orchestrator_config = None
         specialist_configs = []
@@ -170,14 +170,14 @@ class StarTopologyBuilder(TopologyBuilder):
         # Wire backend + skills into the orchestrator.
         # CompositeBackend is always wired when available so that SubAgent specs
         # inherit it and their SkillsMiddleware can resolve skill files under
-        # /workspace/.builder/skills/.  ArtifactBackend is the fallback.
+        # /workspace/.builder/skills/.  DBBackend is the fallback.
         orchestrator_skills = orchestrator_actual_config.get("skills")
         if composite_backend is not None:
             deep_agent_kwargs["backend"] = composite_backend
             logger.info("orchestrator_composite_backend_wired")
         elif backend is not None:
             deep_agent_kwargs["backend"] = backend
-            logger.info("orchestrator_artifact_backend_wired")
+            logger.info("orchestrator_db_backend_wired")
         if orchestrator_skills:
             deep_agent_kwargs["skills"] = orchestrator_skills
             logger.info("orchestrator_skills_wired", skills=orchestrator_skills)

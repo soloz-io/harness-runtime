@@ -2,10 +2,10 @@
 
 The Builder's text editor used to show rows from ``agent_output_files``, a
 projection of the graph's ``last_files`` state key. That projection only exists
-for the DB-backed ``SessionArtifactBackend``: deepagents' ``FilesystemBackend``
+for the DB-backed ``DBBackend``: deepagents' ``FilesystemBackend``
 writes to real disk and never calls ``send([("files", ...)])``, so the moment a
-specialist opted into ``persistent_workspace`` the projection went permanently
-empty and the editor had nothing to show.
+specialist opts into ``persistent_workspace: "s3"`` the projection went
+permanently empty and the editor had nothing to show.
 
 Rather than reinstate the copy, this serves the tree itself. The editor shows
 what the agent is actually working on — including files written by ``npm

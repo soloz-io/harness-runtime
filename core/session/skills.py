@@ -68,10 +68,10 @@ class SkillsManager:
     def __init__(
         self,
         agent_definition: dict[str, Any],
-        artifact_backend: Any,
+        db_backend: Any,
     ) -> None:
         self._agent_definition = agent_definition
-        self._artifact_backend = artifact_backend
+        self._db_backend = db_backend
         self._tmp_dirs: dict[str, Path] = {}
         self._scratch_dir: Optional[str] = None
         self._router: Optional[Any] = None
@@ -232,13 +232,13 @@ class SkillsManager:
             )
 
     def _build_composite_backend(self, routes: dict[str, Any]) -> Optional[Any]:
-        """Wrap an ArtifactBackend + per-skill FilesystemBackends into a CompositeBackend."""
+        """Wrap a DBBackend + per-skill FilesystemBackends into a CompositeBackend."""
         if not routes:
             return None
         try:
             from deepagents.backends.composite import CompositeBackend
 
-            return CompositeBackend(default=self._artifact_backend, routes=routes)
+            return CompositeBackend(default=self._db_backend, routes=routes)
         except ImportError:
             logger.warning("composite_backend_failed_deepagents_not_available")
             return None

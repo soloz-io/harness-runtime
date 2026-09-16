@@ -40,7 +40,7 @@ Test files are in `tests/` (unit) and `tests/integration_tests/` (integration).
 
 ```bash
 # Unit tests (no DB needed)
-pytest tests/test_artifact_reader.py tests/test_artifact_backend.py
+pytest tests/test_artifact_reader.py tests/test_db_backend.py
 
 # Integration tests (requires PostgreSQL + Redis — use the setup script)
 ./scripts/test-setup.sh                                          # all integration tests

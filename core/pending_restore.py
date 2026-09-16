@@ -1,19 +1,27 @@
-"""Apply the agent-side half of an undo when a sandbox starts (ADR-035).
+"""Apply the restore this sandbox was created for (ADR-035).
 
-An undo has two halves — the files on disk and the agent's own memory — and
-both are recorded as a one-shot pin on `chat_sessions` rather than performed
-against a running pod. The workspace pin is consumed by the SDK when it creates
-the pod; this is the other one, consumed here, because rewinding a LangGraph
-thread needs the checkpointer and that lives in this process.
+A restore is a pod creation: the SDK deletes the old sandbox and provisions a
+replacement with both halves pinned — the workspace snapshot as
+`workspacePersistence.checkpointId`, which the sync sidecar applies before this
+container starts, and the LangGraph checkpoint as `RESTORE_CHECKPOINT_ID` in
+this process's environment.
 
-Why a pin and not a call: the workspace restore deletes the sandbox (a restored
-workspace IS a new pod, zero-ops ADR-052 §14.3), so an undo that also phoned the
-sandbox to rewind its thread could only work while a pod happened to be alive.
-A second undo had nothing to call and failed outright. Recording both halves and
-applying them at startup makes an undo pure bookkeeping: it works with no
-sandbox running, and files and memory land on the same point together.
+So the rewind is startup configuration, read once from the env, not a database
+row this process has to remember to poll and clear. The pins it used to read
+(`pending_agent_checkpoint_id`, `pending_restore_checkpoint_id`) are gone: they
+existed only because the restore and the provision were two separate HTTP
+requests with nothing to pass an argument between them. That cost two real
+defects — a destroyed sandbox left advertising itself as live, and the two pins
+clearing at different moments, which showed a restore to users who never asked
+for one.
+
+Applied once per process. A pod created by a restore exists to BE that restore,
+so there is nothing to consume and nothing to clear; restarting the container
+re-applies the same rewind, which is idempotent — forking the same target again
+yields another head carrying identical state.
 """
 
+import os
 from typing import Any, Optional
 
 import structlog
@@ -22,60 +30,32 @@ from core.checkpoint_restore import apply_checkpoint_restore
 
 logger = structlog.get_logger(__name__)
 
-
-def _read_pin(pool: Any, session_id: str) -> Optional[str]:
-    with pool.connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT pending_agent_checkpoint_id FROM chat_sessions WHERE id = %s",
-                (session_id,),
-            )
-            row = cur.fetchone()
-    if not row:
-        return None
-    return row[0] or None
+_applied = False
 
 
-def _clear_pin(pool: Any, session_id: str) -> None:
-    with pool.connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "UPDATE chat_sessions SET pending_agent_checkpoint_id = NULL WHERE id = %s",
-                (session_id,),
-            )
+def pending_restore_checkpoint_id() -> Optional[str]:
+    """The checkpoint this sandbox was created to rewind to, if any."""
+    return os.environ.get("RESTORE_CHECKPOINT_ID") or None
 
 
-async def apply_pending_agent_restore(
-    checkpointer: Any,
-    pool: Any,
-    session_id: str,
-) -> bool:
-    """Rewind this thread if an undo asked for it. Returns True if it did.
+async def apply_pending_agent_restore(checkpointer: Any, session_id: str) -> bool:
+    """Rewind this thread if the pod was created by a restore. True if it did.
 
-    Cleared only AFTER the rewind has been written. Clearing first would let a
-    pod that died in between drop the undo silently, leaving the user with the
-    conversation they asked to discard and no control left to ask again —
-    the restore control disappears with the messages it was attached to.
-    Applying twice is harmless: forking the same target again produces another
-    head carrying identical state, so retry is the safe direction to fail in.
+    Guarded so a second message in the same pod does not rewind again — the
+    checkpoint is startup config and stays in the environment for the life of
+    the container, but it describes a state this thread has already been moved
+    to.
     """
-    if pool is None or checkpointer is None:
+    global _applied
+    if _applied or checkpointer is None:
         return False
 
-    try:
-        checkpoint_id = _read_pin(pool, session_id)
-    except Exception:
-        # A pin that cannot be read must not take the turn down with it. The
-        # user asked for a conversation, and refusing to serve it because an
-        # undo could not be looked up is the worse failure.
-        logger.warning("pending_agent_restore_read_failed", session_id=session_id, exc_info=True)
-        return False
-
+    checkpoint_id = pending_restore_checkpoint_id()
     if not checkpoint_id:
         return False
 
     await apply_checkpoint_restore(checkpointer, session_id, checkpoint_id)
-    _clear_pin(pool, session_id)
+    _applied = True
     logger.info(
         "pending_agent_restore_applied",
         session_id=session_id,

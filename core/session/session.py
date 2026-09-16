@@ -2,7 +2,7 @@
 
 Thin orchestrator that delegates to focused sub-modules:
 - ``config``: agent configuration extraction and persistence
-- ``backends``: ArtifactBackend construction
+- ``backends``: Backend construction (DBBackend or S3Backend)
 - ``skills``: SkillsManager for skills lifecycle
 - ``tools``: ToolsManager for CLI tools lifecycle
 - ``execution``: graph construction, input preparation, turn helpers
@@ -13,11 +13,10 @@ from typing import Any, Optional
 
 import structlog
 
-from core.agent_backend import is_persistent_workspace_enabled
+from core.agent_backend import is_s3_mode, resolve_backend
 from core.event_publisher import EventPublisher
 from core.executor import ExecutionManager
 from core.metro import ensure_metro_running, ensure_watcher_running
-from core.session.backends import build_artifact_backend
 from core.session.config import AgentConfig, extract_agent_config, persist_system_prompt
 from core.session.execution import (
     build_graph,
@@ -72,7 +71,7 @@ class Session:
         # The harness now has no knowledge of how /workspace came to exist —
         # which is the whole point of the split (waypoint ADR-036 §10). It reads
         # and writes a directory.
-        if is_persistent_workspace_enabled(self.agent_definition):
+        if is_s3_mode(self.agent_definition):
             set_active_context(
                 workspace_id, app_id, self.session_id, getattr(execution_manager, "_pool", None)
             )
@@ -91,8 +90,9 @@ class Session:
         self.checkpointer = execution_manager.checkpointer
         persist_system_prompt(self.session_id, cfg, getattr(execution_manager, "_pool", None))
 
-        # 2. Artifact backend (DB-backed storage for tool outputs)
-        self._backend = build_artifact_backend(
+        # 2. Backend (DBBackend for "db" mode, S3Backend for "s3" mode)
+        self._backend = resolve_backend(
+            self.agent_definition,
             workspace_id,
             self.session_id,
             getattr(execution_manager, "_pool", None),

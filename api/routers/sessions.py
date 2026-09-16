@@ -324,7 +324,7 @@ async def handle_message(session_id: str, body: dict[str, Any]) -> dict[str, Any
 
     if not workspace_id:
         logger.warning(
-            "workspace_id not provided — ArtifactBackend will be unavailable "
+            "workspace_id not provided — DBBackend will be unavailable "
             "(set workspace_id in POST body or WORKSPACE_ID env var)"
         )
         raise HTTPException(
@@ -425,21 +425,18 @@ async def handle_message(session_id: str, body: dict[str, Any]) -> dict[str, Any
         else:
             return {"success": True}
 
-    # An undo recorded before this pod existed (ADR-035).
+    # This pod may have been created BY a restore (ADR-035).
     #
-    # Checked on every message rather than once per pod: the pin is normally
-    # written while no sandbox is running, but a recycle that failed leaves a
-    # live pod with a pin waiting, and that turn must still start from the
-    # rewound thread. One indexed lookup, and it must happen BEFORE any session
-    # is built or resumed, since a Session constructed from the old head would
-    # carry exactly the messages the undo discarded.
+    # The checkpoint arrives as startup config (RESTORE_CHECKPOINT_ID), applied
+    # once per process — reading the environment costs nothing, so it is checked
+    # here rather than at import, where the checkpointer does not exist yet. It
+    # must happen BEFORE any session is built or resumed: a Session constructed
+    # from the old head would carry exactly the messages the undo discarded.
     from core.pending_restore import apply_pending_agent_restore
 
     _checkpointer = execution_manager._async_checkpointer or execution_manager.checkpointer
     try:
-        if await apply_pending_agent_restore(
-            _checkpointer, getattr(execution_manager, "_pool", None), session_id
-        ):
+        if await apply_pending_agent_restore(_checkpointer, session_id):
             # Drop any in-memory session: it was built from the pre-undo head.
             session_store.pop(session_id, None)
     except Exception:

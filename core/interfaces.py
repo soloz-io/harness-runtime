@@ -32,7 +32,7 @@ class TopologyBuilder(Protocol):
             workspace_id: The workspace/workflow ID for cross-session artifact access.
             session_id: The current session ID (excluded from artifact queries).
             db_pool: A sync PostgreSQL connection pool for artifact DB queries.
-            backend: Pre-built ArtifactBackend instance (takes priority over workspace_id/session_id/db_pool).
+            backend: Pre-built DBBackend or S3Backend instance (takes priority over workspace_id/session_id/db_pool).
             skills: List of skill paths for SkillsMiddleware discovery.
             composite_backend: Pre-built CompositeBackend for skills file access.
             tools_ctx: ToolsContext with per-node tool specs for CustomToolMiddleware.

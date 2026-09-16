@@ -1,34 +1,18 @@
-from typing import Any, Optional
+"""S3Backend: Real-disk backend with sidecar-managed S3 persistence.
 
+When ``persistent_workspace: "s3"`` is set in the agent definition, the
+session uses this backend. It wraps deepagents' ``LocalShellBackend`` for
+real-disk file operations and shell execution.
 
-def build_db_backend(
-    workspace_id: str,
-    session_id: str,
-    pool: Any,
-    app_id: Optional[str] = None,
-) -> Optional[Any]:
-    """Build a DBBackend if a DB pool is available.
+S3 persistence itself is handled by the platform's workspace-sync sidecar
+(zero-ops ADR-052 §14), not by this backend. The sidecar snapshots the
+workspace to S3 on its own schedule and at teardown. This backend simply
+provides the real-disk access that makes sidecar persistence meaningful.
+"""
 
-    The single backend serves both namespaces: the session workspace keyed
-    by ``workspace_id`` and — when ``app_id`` is provided — app-global
-    ``.global/`` artifacts keyed by ``app_id``.
+from __future__ import annotations
 
-    Returns ``None`` when the ``deepagents`` package or DB pool is
-    unavailable — callers must handle that case.
-    """
-    if pool is None:
-        return None
-    try:
-        from core.backends.db import DBBackend
-
-        return DBBackend(
-            workspace_id=workspace_id,
-            session_id=session_id,
-            pool=pool,
-            app_id=app_id,
-        )
-    except ImportError:
-        return None
+from typing import Any
 
 
 def build_s3_backend(root_dir: str = "/") -> Any:

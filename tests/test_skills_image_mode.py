@@ -32,8 +32,8 @@ from core.session.skill_paths import (
 )
 
 
-class _FakeArtifactBackend:
-    """Minimal stand-in for ArtifactBackend (CompositeBackend default)."""
+class _FakeDBBackend:
+    """Minimal stand-in for DBBackend (CompositeBackend default)."""
 
 
 @pytest.fixture()
@@ -111,7 +111,7 @@ def test_skills_manager_uses_image_dir_without_git_clone(
 ) -> None:
     manager = SkillsManager(
         _definition(["/workspace/.oranger/skills/chronixel-video/"]),
-        _FakeArtifactBackend(),
+        _FakeDBBackend(),
     )
     ctx = manager.initialize()
 
@@ -142,7 +142,7 @@ def test_skills_manager_image_mode_load_skill_via_symlink(
 
     manager = SkillsManager(
         _definition(["/workspace/.oranger/skills/chronixel-video/"]),
-        _FakeArtifactBackend(),
+        _FakeDBBackend(),
     )
     manager.initialize()
 
@@ -168,7 +168,7 @@ def test_skills_manager_image_dir_missing_hard_errors(
 
     manager = SkillsManager(
         _definition(["/workspace/.oranger/skills/chronixel-video/"]),
-        _FakeArtifactBackend(),
+        _FakeDBBackend(),
     )
 
     with pytest.raises(SkillsError):
@@ -183,7 +183,7 @@ def test_skills_manager_image_dir_unset_hard_errors(
 
     manager = SkillsManager(
         _definition(["/workspace/.oranger/skills/chronixel-video/"]),
-        _FakeArtifactBackend(),
+        _FakeDBBackend(),
     )
 
     with pytest.raises(SkillsError):
@@ -198,7 +198,7 @@ def test_skills_manager_isolates_only_nodes_with_skills(
 
     manager = SkillsManager(
         _definition(["/workspace/.oranger/skills/chronixel-video/"]),
-        _FakeArtifactBackend(),
+        _FakeDBBackend(),
     )
     try:
         manager.initialize()
@@ -310,7 +310,7 @@ def test_skills_manager_discovers_nested_subagent_skills(
         f"{RUNTIME_SKILLS_BASE}/chronixel-video/"
     ]
 
-    manager = SkillsManager(normalized, _FakeArtifactBackend())
+    manager = SkillsManager(normalized, _FakeDBBackend())
     try:
         ctx = manager.initialize()
         assert f"{runtime_base}/skills/chronixel-video/" in ctx.composite_backend.routes

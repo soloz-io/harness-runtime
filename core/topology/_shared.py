@@ -32,23 +32,23 @@ except ImportError as e:
     ) from e
 
 
-def ensure_artifact_backend(
+def ensure_db_backend(
     backend: Any,
     *,
     workspace_id: str | None,
     session_id: str | None,
     db_pool: Any,
 ) -> Any:
-    """Auto-construct a SessionArtifactBackend when one isn't pre-built."""
+    """Auto-construct a DBBackend when one isn't pre-built."""
     if backend is None and workspace_id and session_id and db_pool is not None:
-        from core.backends.artifact import SessionArtifactBackend
+        from core.backends.db import DBBackend
 
-        backend = SessionArtifactBackend(
+        backend = DBBackend(
             workspace_id=workspace_id,
             session_id=session_id,
             pool=db_pool,
         )
-        logger.info("session_artifact_backend_auto_constructed")
+        logger.info("db_backend_auto_constructed")
     return backend
 
 
@@ -181,7 +181,7 @@ def build_deep_agent_runnable(
         logger.info("composite_backend_wired")
     elif backend is not None:
         deep_agent_kwargs["backend"] = backend
-        logger.info("artifact_backend_wired")
+        logger.info("db_backend_wired")
     # Deliberately NOT passed to create_deep_agent as skills=[...]: that wires
     # deepagents' SkillsMiddleware, whose SKILLS_SYSTEM_PROMPT instructs the
     # model to read skills with `read_file(file_path=..., limit=1000)`. That

@@ -29,8 +29,7 @@ from langchain_core.runnables import Runnable
 from langchain_quickjs import CodeInterpreterMiddleware
 
 from core.agent_backend import (
-    build_workspace_filesystem_backend,
-    specialist_wants_persistent_workspace,
+    is_s3_mode,
 )
 from core.interfaces import TopologyBuilder
 from core.metro import ensure_metro_running, ensure_watcher_running
@@ -41,7 +40,7 @@ from core.middleware.structured_output import (
 )
 from core.topology._shared import (
     build_deep_agent_runnable,
-    ensure_artifact_backend,
+    ensure_db_backend,
 )
 from core.topology.subagent_builder import build_subagent
 
@@ -87,7 +86,7 @@ class CompositeTopologyBuilder(TopologyBuilder):
         if not nodes:
             raise ValueError("Agent definition must contain at least one node")
 
-        backend = ensure_artifact_backend(
+        backend = ensure_db_backend(
             backend,
             workspace_id=workspace_id,
             session_id=session_id,
@@ -116,12 +115,16 @@ class CompositeTopologyBuilder(TopologyBuilder):
             specialist_count=len(specialist_configs),
         )
 
+        # Session-level persistent workspace flag
+        persistent = is_s3_mode(definition)
+
         compiled_subagents = self._compile_specialists(
             specialist_configs,
             available_tools,
             backend=backend,
             composite_backend=composite_backend,
             tools_ctx=tools_ctx,
+            persistent_workspace=persistent,
         )
 
         logger.info(
@@ -243,6 +246,7 @@ class CompositeTopologyBuilder(TopologyBuilder):
         backend: Any,
         composite_backend: Any,
         tools_ctx: Any,
+        persistent_workspace: bool = False,
     ) -> List[Any]:
         """Compile each specialist into a CompiledSubAgent.
 
@@ -274,6 +278,7 @@ class CompositeTopologyBuilder(TopologyBuilder):
                     backend=backend,
                     composite_backend=composite_backend,
                     tools_ctx=tools_ctx,
+                    persistent_workspace=persistent_workspace,
                 )
                 compiled.append(spec)
 
@@ -290,6 +295,7 @@ class CompositeTopologyBuilder(TopologyBuilder):
         backend: Any,
         composite_backend: Any,
         tools_ctx: Any,
+        persistent_workspace: bool = False,
     ) -> Dict[str, Any]:
         """Build a specialist as a CompiledSubAgent wrapping create_deep_agent.
 
@@ -300,12 +306,14 @@ class CompositeTopologyBuilder(TopologyBuilder):
         """
         agent_name = specialist_config.get("name", node_id)
 
-        # Persistent-workspace opt-in (config.backend.persistent_workspace) —
-        # all decision logic lives in core/workspace/, this just delegates. Swaps
-        # this one specialist onto a real-disk backend instead of the
+        # S3 mode: real-disk backend for sidecar-managed persistence.
+        # All decision logic lives in core/agent_backend.py, this just delegates.
+        # Swaps this specialist onto a real-disk backend instead of the
         # DB-backed default; every other specialist is untouched.
-        if specialist_wants_persistent_workspace(specialist_config):
-            backend = build_workspace_filesystem_backend()
+        if persistent_workspace:
+            from core.session.backends import build_s3_backend
+
+            backend = build_s3_backend()
             composite_backend = None
             # No FilesystemPermission rules: the sandbox pod is the security
             # boundary (ephemeral, per-session, default-deny NetworkPolicy),
