@@ -50,6 +50,7 @@ def build_subagent(
     *,
     skills: list[str] | None = None,
     tools_spec: Any = None,
+    persistent_workspace: bool = False,
 ) -> dict[str, Any]:  # Returns SubAgent dict
     """
     Build a SubAgent spec from specialist configuration.
@@ -147,6 +148,7 @@ def build_subagent(
             response_format,
             skills=skills,
             tools_spec=tools_spec,
+            persistent_workspace=persistent_workspace,
         )
 
     except Exception as e:
@@ -170,6 +172,7 @@ def _build_subagent_spec(
     *,
     skills: list[str] | None = None,
     tools_spec: Any = None,
+    persistent_workspace: bool = False,
 ) -> dict[str, Any]:
     """Build a declarative SubAgent dict.
 
@@ -229,8 +232,6 @@ def _build_subagent_spec(
     if subagent_skills:
         from pathlib import PurePosixPath
 
-        from deepagents.middleware.permissions import FilesystemPermission
-
         # Resolve each skill path to its actual mounted location under
         # /workspace/.builder/skills/<skill-name>/.
         # Definition files (definition.json) may use a different prefix
@@ -241,28 +242,42 @@ def _build_subagent_spec(
             skill_name = PurePosixPath(raw_path.rstrip("/")).name
             resolved_skill_paths.append(f"/workspace/.builder/skills/{skill_name}/")
 
-        # Permissions — order matters: _check_fs_permission is first-match.
-        # 1. Explicitly allow reads from this agent's own resolved skill dirs.
-        # 2. Deny reads to *other* agents' skill dirs (must precede the broad allow).
-        # 3. Allow full read+write across /workspace/** for all output files.
-        allowed_read = [f"{p.rstrip('/')}/**" for p in resolved_skill_paths]
-        subagent_spec["permissions"] = [
-            FilesystemPermission(operations=["read"], paths=allowed_read, mode="allow"),
-            FilesystemPermission(
-                operations=["read"], paths=["/workspace/.builder/skills/*/**"], mode="deny"
-            ),
-            FilesystemPermission(
-                operations=["read", "write"],
-                paths=["/workspace/**"],
-                mode="allow",
-            ),
-        ]
+        # ACLs only on the DB-backed path. An S3-backed session runs on
+        # LocalShellBackend, which executes commands, and deepagents refuses
+        # tool-level permissions there outright — FilesystemMiddleware raises
+        # NotImplementedError, because the execute tool ignores them. The same
+        # call was already made for specialists in composite_topology: the
+        # sandbox pod is the boundary, and an ACL that anything run through
+        # run_tool walks past is not a second one.
+        #
+        # The skills themselves are resolved either way: a subagent without
+        # them loads nothing and cannot do its job.
+        if not persistent_workspace:
+            from deepagents.middleware.permissions import FilesystemPermission
+
+            # Permissions — order matters: _check_fs_permission is first-match.
+            # 1. Explicitly allow reads from this agent's own resolved skill dirs.
+            # 2. Deny reads to *other* agents' skill dirs (must precede the broad allow).
+            # 3. Allow full read+write across /workspace/** for all output files.
+            allowed_read = [f"{p.rstrip('/')}/**" for p in resolved_skill_paths]
+            subagent_spec["permissions"] = [
+                FilesystemPermission(operations=["read"], paths=allowed_read, mode="allow"),
+                FilesystemPermission(
+                    operations=["read"], paths=["/workspace/.builder/skills/*/**"], mode="deny"
+                ),
+                FilesystemPermission(
+                    operations=["read", "write"],
+                    paths=["/workspace/**"],
+                    mode="allow",
+                ),
+            ]
 
         logger.info(
             "subagent_skills_resolved",
             agent_name=agent_name,
             raw_skills=subagent_skills,
             resolved_skills=resolved_skill_paths,
+            permissions_applied=not persistent_workspace,
         )
 
         # Pass the resolved paths directly to SkillsMiddleware via the spec.

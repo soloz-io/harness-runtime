@@ -157,11 +157,20 @@ class GraphBuilder:
             )
 
             # Step 4: Build all sub-agents as CompiledSubAgent instances
+            #
+            # S3 mode runs on an execution-capable backend, where deepagents
+            # refuses filesystem ACLs; build_subagent needs to know which it is.
+            from core.agent_backend import is_s3_mode
+
             compiled_subagents: List[Any] = []
 
             for specialist_node in specialist_configs:
                 specialist_config = specialist_node.get("config", {})
-                sub_agent = build_subagent(specialist_config, available_tools)
+                sub_agent = build_subagent(
+                    specialist_config,
+                    available_tools,
+                    persistent_workspace=is_s3_mode(definition),
+                )
                 compiled_subagents.append(sub_agent)
 
             logger.info(

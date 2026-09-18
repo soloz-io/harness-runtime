@@ -83,6 +83,10 @@ class StarTopologyBuilder(TopologyBuilder):
             specialist_count=len(specialist_configs),
         )
 
+        # S3 mode runs on an execution-capable backend, where deepagents
+        # refuses filesystem ACLs; build_subagent needs to know which it is.
+        from core.agent_backend import is_s3_mode
+
         compiled_subagents: List[Any] = []
         for specialist_node in specialist_configs:
             specialist_config = specialist_node.get("config", {})
@@ -94,6 +98,7 @@ class StarTopologyBuilder(TopologyBuilder):
                 available_tools,
                 skills=specialist_skills,
                 tools_spec=tools_spec,
+                persistent_workspace=is_s3_mode(definition),
             )
             compiled_subagents.append(sub_agent)
 

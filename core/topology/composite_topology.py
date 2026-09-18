@@ -350,6 +350,7 @@ class CompositeTopologyBuilder(TopologyBuilder):
                     available_tools,
                     skills=spec.get("skills"),
                     tools_spec=tools_spec,
+                    persistent_workspace=persistent_workspace,
                 )
             )
 
