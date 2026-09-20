@@ -22,6 +22,31 @@ from langchain_core.tools import tool as lc_tool
 
 logger = structlog.get_logger(__name__)
 
+# Roots that exist for the *agent*, not for the tool subprocess. The agent's
+# ``write_file`` persists to the ``agent_output_files`` table, so an artifact it
+# just wrote has no file behind it here; and the subprocess runs with cwd set to
+# the script's own folder, not the workspace. A tool handed one of these paths
+# therefore stats something that is never there and fails as "file not found",
+# which reads like a missing artifact rather than the wrong access method.
+#
+# Tools resolve artifacts by bare filename through ``workdir.read_artifact``,
+# which queries that table. Nothing legitimate needs a workspace path on the
+# command line: ``--working-dir`` already defaults to $WORKSPACE, and a local
+# test fixture lives outside these roots.
+_WORKSPACE_ROOTS = ("/workspace", "/home/ubuntu")
+
+_WORKSPACE_PATH_HELP = (
+    "Tools do not take workspace paths. Artifacts are resolved by filename "
+    "against the session's stored outputs, so pass the tool's own flags "
+    "instead and let it find the file (a tool that reads an artifact already "
+    "knows its name). Run the tool with --help to see what it accepts."
+)
+
+
+def _is_workspace_path(arg: str) -> bool:
+    """True when *arg* is an absolute path into the agent's workspace."""
+    return any(arg == root or arg.startswith(root + "/") for root in _WORKSPACE_ROOTS)
+
 
 def _scope_env() -> dict[str, str]:
     """Read session scope ids from the active graph config for the subprocess env.
@@ -105,13 +130,24 @@ def _build_run_tool(tools_dirs: list[Path]):
         cmd: list[str] = [sys.executable, str(script)]
         if cli_args.strip():
             try:
-                cmd.extend(shlex.split(cli_args))
+                argv = shlex.split(cli_args)
             except ValueError as e:
                 return {
                     "success": False,
                     "output": f"Invalid cli_args: {e}\nReceived: {cli_args!r}",
                     "exit_code": -1,
                 }
+            offending = [a for a in argv if _is_workspace_path(a)]
+            if offending:
+                return {
+                    "success": False,
+                    "output": (
+                        f"Invalid cli_args: {', '.join(repr(a) for a in offending)}.\n"
+                        f"{_WORKSPACE_PATH_HELP}"
+                    ),
+                    "exit_code": -1,
+                }
+            cmd.extend(argv)
 
         logger.info(
             "run_tool",

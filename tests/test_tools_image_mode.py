@@ -129,6 +129,48 @@ def test_run_tool_rejects_path_traversal(env_setup: None, image_tools_dir: Path)
     assert result["success"] is False
 
 
+def test_run_tool_rejects_workspace_path_in_cli_args(
+    env_setup: None, image_tools_dir: Path
+) -> None:
+    """An artifact path is the wrong access method, not a missing file.
+
+    ``write_file`` persists to ``agent_output_files``, so a workspace path has
+    no file behind it in the tool subprocess. Letting it through produces a
+    "file not found" that reads like a missing artifact; tools resolve
+    artifacts by filename through ``workdir.read_artifact`` instead.
+    """
+    from core.middleware.custom_tool_middleware import CustomToolMiddleware
+
+    tools_dir = image_tools_dir / "motion-graphics" / "tools"
+    mw = CustomToolMiddleware([tools_dir])
+    run_tool = mw.tools[0]
+
+    for arg in (
+        "/workspace/video_sequences.jsonl",
+        "--input /workspace/segments_base.json",
+        "/home/ubuntu/audio.wav",
+        "/workspace",
+    ):
+        result = run_tool.invoke({"tool_name": "build_video_request", "cli_args": arg})
+        assert result["success"] is False, arg
+        assert "do not take workspace paths" in result["output"], arg
+
+
+def test_run_tool_allows_non_workspace_args(env_setup: None, image_tools_dir: Path) -> None:
+    """The guard must not over-match: flags, URLs and local fixtures pass."""
+    from core.middleware.custom_tool_middleware.middleware import _is_workspace_path
+
+    for arg in (
+        "--scenes",
+        "003",
+        "https://example.com/face.jpg",
+        "scene003.wav",
+        "/tmp/fixture",
+        "/workspaces/other",
+    ):
+        assert _is_workspace_path(arg) is False, arg
+
+
 def test_run_tool_rejects_unknown_tool(env_setup: None, image_tools_dir: Path) -> None:
     from core.middleware.custom_tool_middleware import CustomToolMiddleware
 

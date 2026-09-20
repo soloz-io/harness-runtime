@@ -470,7 +470,17 @@ async def handle_message(session_id: str, body: dict[str, Any]) -> dict[str, Any
         session_store[session_id] = state
         logger.info("session_initialized", session_id=session_id)
 
-    if message or resume_payload:
+    # An attachment with no typed words is still a turn.
+    #
+    # This read `if message or resume_payload`, so a user who attached a photo
+    # and typed nothing produced an empty `message` and no task at all: the
+    # upload succeeded, the HTTP call returned 200, and the agent was never
+    # woken. Nothing failed anywhere, and the user simply never got a reply.
+    #
+    # Sending a picture on its own is an ordinary way to answer "show me" — the
+    # presenter photo this pipeline asks for is exactly that — so the content of
+    # a turn is words OR attachments, not words alone.
+    if message or resume_payload or attachments:
         prior_task = state.task
         prior_in_flight = prior_task is not None and not prior_task.done()
         state.task = asyncio.create_task(_run_turn_async(state, message, role, attachments))
