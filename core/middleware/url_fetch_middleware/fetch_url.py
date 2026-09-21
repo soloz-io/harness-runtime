@@ -67,7 +67,29 @@ _CONTENT_TYPE_TO_BLOCK_TYPE: dict[str, str] = {
     "video": "video",
     "audio": "audio",
     "application/pdf": "file",
+    "text": "text",
 }
+
+# Content types that are text in everything but name, so the model can read
+# them directly. Returned decoded, never base64: a page the model could have
+# read as characters is useless to it as an encoded blob, and costs ~1.33
+# characters of context per byte for the privilege.
+_TEXTUAL_CONTENT_TYPES: frozenset[str] = frozenset(
+    {
+        "application/json",
+        "application/xml",
+        "application/xhtml+xml",
+        "application/javascript",
+        "application/x-yaml",
+        "application/yaml",
+    }
+)
+
+# How much fetched text is worth placing in context. A documentation page runs
+# to hundreds of thousands of characters, and the whole of one is rarely what
+# the agent needed. Truncation is announced in the returned text — never
+# silent, so the agent knows it is reading a prefix and can narrow its request.
+MAX_TEXT_CHARS = 40_000
 
 MAX_FETCH_BYTES = (
     10 * 1024 * 1024
@@ -97,6 +119,8 @@ _NON_INLINE_BLOCK_TYPES = frozenset({"audio", "video"})
 
 def _block_type_for(url: str, content_type: str) -> str:
     primary = content_type.split(";")[0].strip().lower()
+    if primary in _TEXTUAL_CONTENT_TYPES or primary.endswith(("+json", "+xml")):
+        return "text"
     for prefix, block_type in _CONTENT_TYPE_TO_BLOCK_TYPE.items():
         if primary == prefix or primary.startswith(f"{prefix}/"):
             return block_type
@@ -104,7 +128,18 @@ def _block_type_for(url: str, content_type: str) -> str:
     from urllib.parse import urlparse
 
     suffix = PurePosixPath(urlparse(url).path).suffix.lower()
-    return _EXTENSION_TO_BLOCK_TYPE.get(suffix, "file")
+    # "unknown", not "file".
+    #
+    # This fell back to "file", so ANY unrecognised content type became a
+    # base64 file block — including text/html. Fetching one docs page produced
+    # a 1,389,952-character base64 blob of HTML that the model cannot decode,
+    # and the gateway rejected the whole request with "file must have a file_id
+    # or file_data". The turn died.
+    #
+    # Guessing "file" is the same mistake the audio guard already fixed one
+    # layer up: handing the model bytes it has no way to use. A type this
+    # module does not recognise is reported, not encoded.
+    return _EXTENSION_TO_BLOCK_TYPE.get(suffix, "unknown")
 
 
 def _human_bytes(content_length: str | None) -> str:
@@ -210,6 +245,15 @@ async def _do_fetch(url: str, tool_call_id: str | None) -> ToolMessage:
                 # genuine check, not an assumption, and it is the one thing
                 # this branch is entitled to report.
                 block_type = _block_type_for(url, content_type)
+                if block_type == "unknown":
+                    return _accessible_not_inlined(
+                        url,
+                        block_type=f"resource of type {content_type.split(';')[0].strip() or 'unknown'}",
+                        content_type=content_type,
+                        content_length=content_length,
+                        status_code=response.status_code,
+                        tool_call_id=tool_call_id,
+                    )
                 if block_type in _NON_INLINE_BLOCK_TYPES:
                     # An empty resource is a broken one. Reporting it as
                     # reachable would send the agent onward to a tool that
@@ -275,6 +319,42 @@ async def _do_fetch(url: str, tool_call_id: str | None) -> ToolMessage:
     import base64
 
     mime_type = content_type.split(";")[0].strip() or "application/octet-stream"
+
+    # Text comes back as text.
+    #
+    # Encoding it was the defect: a text/html page classified as "file" was
+    # base64'd into 1.39M characters the model cannot decode, and the request
+    # was rejected outright. Decoded, the same page is something it can
+    # actually read — and a third the size.
+    if block_type == "text":
+        body = bytes(chunks).decode("utf-8", errors="replace")
+        truncated = len(body) > MAX_TEXT_CHARS
+        if truncated:
+            body = (
+                body[:MAX_TEXT_CHARS]
+                + f"\n\n[fetch_url] truncated: showing the first {MAX_TEXT_CHARS:,} of "
+                + f"{len(bytes(chunks)):,} bytes from {url}. Request a more specific page "
+                + "or anchor if you need the rest."
+            )
+        logger.info(
+            "fetch_url_succeeded_text",
+            url=url,
+            mime_type=mime_type,
+            bytes=len(chunks),
+            truncated=truncated,
+        )
+        return ToolMessage(
+            content=body,
+            name="fetch_url",
+            tool_call_id=tool_call_id,
+            additional_kwargs={
+                "fetch_url_source": url,
+                "fetch_url_media_type": mime_type,
+                "fetch_url_truncated": truncated,
+            },
+            status="success",
+        )
+
     b64_content = base64.b64encode(bytes(chunks)).decode("ascii")
 
     logger.info(
