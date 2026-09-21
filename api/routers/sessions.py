@@ -25,19 +25,54 @@ _SYSTEM_NOTICE_PREFIX = "[System Notification]"
 
 
 def _notification_text(raw: str) -> str:
-    """Extract human-readable text from a JSON notification payload.
+    """Render a JSON notification payload as the text the agent will read.
 
-    Returns the ``message`` field if present, then ``title``, otherwise the
-    raw string itself.  Parsing errors are handled gracefully by returning the
-    raw input.
+    This string is the ONLY part of a notification an agent ever sees. The full
+    payload is written to chat_messages for the UI, but the turn is fed just
+    this text — so anything omitted here is not "less prominent", it is gone.
+
+    Therefore: nothing is dropped. ``message``/``title`` lead because a
+    notification is prose first, and every remaining field follows as
+    ``key: value``. The harness does not decide which fields matter, because it
+    cannot: the payload is authored by whatever workflow sent it, and its
+    vocabulary belongs to that app.
+
+    This function used to return ``message`` alone, which silently discarded
+    every other field. An app whose notification carried the address of what a
+    job produced saw that address deleted in transit, and its agent — told to
+    use a field that no longer existed — correctly refused to invent one and
+    reported the pipeline blocked while the asset sat in storage. Naming the
+    dropped field here and reading it explicitly would have fixed that one app
+    and left the next field, and the next app, to rediscover the same bug. The
+    contract is losslessness, not a list of known keys.
+
+    Non-dict and unparseable payloads pass through untouched: a notification
+    that is already a plain string is already its own text.
     """
     try:
         payload = _json.loads(raw)
     except (TypeError, ValueError, _json.JSONDecodeError):
         return raw
-    if isinstance(payload, dict):
-        return payload.get("message") or payload.get("title") or raw
-    return raw
+    if not isinstance(payload, dict) or not payload:
+        return raw
+
+    lead_key = "message" if payload.get("message") else ("title" if payload.get("title") else None)
+    lead = str(payload[lead_key]) if lead_key else ""
+
+    lines: list[str] = []
+    for key, value in payload.items():
+        if key == lead_key or value is None or value == "":
+            continue
+        rendered = value if isinstance(value, str) else _json.dumps(value)
+        rendered = rendered.strip()
+        if not rendered or rendered in lead:
+            # Already said in the prose; repeating it adds nothing to read.
+            continue
+        lines.append(f"{key}: {rendered}")
+
+    if not lead and not lines:
+        return raw
+    return "\n".join(([lead] if lead else []) + lines)
 
 
 router = APIRouter(tags=["sessions"])

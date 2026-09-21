@@ -23,7 +23,6 @@ import structlog
 
 # Add these new imports for the orchestrator state fix
 from deepagents import DeepAgentState
-from deepagents.middleware.filesystem import FilesystemMiddleware
 from langchain.agents.middleware import TodoListMiddleware
 from langchain_core.runnables import Runnable
 from langchain_quickjs import CodeInterpreterMiddleware
@@ -55,6 +54,7 @@ except ImportError as e:
     ) from e
 
 try:
+    from deepagents.middleware.summarization import create_summarization_middleware
     from langchain.agents import create_agent
     from langchain.agents.middleware import HumanInTheLoopMiddleware
 except ImportError as e:
@@ -188,12 +188,32 @@ class CompositeTopologyBuilder(TopologyBuilder):
             response_format=response_format_raw,
         )
 
-        # FIX: Provide the orchestrator with FilesystemMiddleware so it owns the files channel
         # Middleware stack: HumanInteraction + CodeInterpreter + SubAgent(task)
         orchestrator_backend = composite_backend or backend
+        # NO FilesystemMiddleware.
+        #
+        # It is one import that grants seven tools — ls, read_file, write_file,
+        # edit_file, glob, grep and `execute`, a shell in the sandbox — and the
+        # orchestrator is told not to use any of them. Its own instructions say
+        # "Never use filesystem tools (ls, glob, read_file, cat) to determine
+        # what exists", because the specialists' Decision Reports ARE the
+        # project state; and the delegation contract forbids naming file
+        # operations in a task description. Holding the tools anyway left that
+        # as advice the model could ignore, with a shell behind it.
+        #
+        # Removing it makes the instruction enforceable rather than hopeful, and
+        # takes seven tool schemas out of every orchestrator request — the same
+        # context this agent was overflowing.
+        #
+        # The cost, deliberately accepted: summarization offloads evicted
+        # messages to the backend and embeds their path in the summary so the
+        # agent can re-open them with read_file. Without that tool the offload
+        # still happens and the path is still recorded, but the ORCHESTRATOR
+        # cannot read it back — compaction becomes one-way for this agent. Its
+        # work is routing from reports it has already received, so the summary's
+        # intent/artifacts/next-steps is the part it actually needs.
         middleware_stack: list[Any] = [
             TodoListMiddleware(),
-            FilesystemMiddleware(backend=orchestrator_backend),
             HumanInteractionMiddleware(),
             CodeInterpreterMiddleware(timeout=300),
         ]
@@ -210,6 +230,22 @@ class CompositeTopologyBuilder(TopologyBuilder):
                 "subagent_middleware_wired",
                 subagent_count=len(compiled_subagents),
             )
+
+        # Context compression for the ORCHESTRATOR.
+        #
+        # create_deep_agent adds this to every specialist automatically; the
+        # orchestrator is a plain create_agent and got nothing — and it is the
+        # one participant whose context is unbounded. A specialist is born,
+        # answers one task and dies; the orchestrator accumulates every turn,
+        # every dispatch and every Decision Report for the whole session.
+        # Observed: eleven specialist reports in one session, the last ~2,400
+        # tokens, ending in a provider rejection that named the orchestrator.
+        #
+        # Added LAST, after the tool-providing middleware. Compression measures
+        # what the model is about to be sent, and the tool schemas contributed
+        # by the middleware above are part of that.
+        middleware_stack.append(create_summarization_middleware(model, orchestrator_backend))
+        logger.info("orchestrator_summarization_wired")
 
         # HumanInTheLoop for ask_user interrupts
         interrupt_on_config = config.get("interrupt_on")

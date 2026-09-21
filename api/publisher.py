@@ -126,10 +126,13 @@ class SSEEventPublisher(EventPublisher):
         session_id: str,
         messages: list[dict[str, Any]],
         files: Optional[dict[str, Any]] = None,
+        usage: Optional[dict[str, int]] = None,
     ) -> None:
         data: dict[str, Any] = {"messages": messages}
         if files:
             data["files"] = files
+        if usage:
+            data["usage"] = usage
         self._write(self._protocol_event("values", data))
 
     def publish_system_init(

@@ -521,6 +521,47 @@ class ExecutionManager:
     # Async execution
     # ------------------------------------------------------------------
 
+    async def _warn_if_stalled(self, graph: Any, config: Any, session_id: str) -> None:
+        """Report a turn that drained cleanly while the graph is still parked.
+
+        Reaching here means no handler stopped the stream, so nothing was
+        published as an interrupt — yet a non-empty ``next`` says the graph did
+        not finish. That combination is a turn the user sees end with no answer
+        and no error: the failure mode that hid a dropped ``ask_user`` question
+        behind a clean ``turn_completed`` line, twice, with the graph waiting on
+        an answer the UI was never given the chance to collect.
+
+        Detect and say so; do not repair. Publishing the interrupt from here
+        would be a second delivery path for something that already has one, and
+        the next time that one breaks the symptom would be hidden again.
+
+        Best-effort like the checkpoint stamp beside it: a graph with no
+        checkpointer has no state to read, and failing to read it is not worth
+        failing a turn over.
+        """
+        try:
+            snapshot = await graph.aget_state(config)
+        except Exception as e:  # noqa: BLE001 - diagnostic only
+            logger.debug("stall_check_failed", session_id=session_id, error=str(e))
+            return
+        if snapshot is None:
+            return
+        pending = tuple(getattr(snapshot, "next", ()) or ())
+        if not pending:
+            return
+        interrupts = getattr(snapshot, "interrupts", None) or ()
+        logger.error(
+            "turn_stalled_graph_still_pending",
+            session_id=session_id,
+            pending_nodes=list(pending),
+            interrupt_count=len(interrupts),
+            detail=(
+                "The stream ended but the graph has not finished. If an interrupt is "
+                "pending it was never published, so the client has nothing to answer "
+                "and the turn will appear to end in silence."
+            ),
+        )
+
     async def _stamp_turn_checkpoint(self, graph: Any, config: Any, session_id: str) -> None:
         """Attach the just-committed checkpoint id to this turn's messages.
 
@@ -627,6 +668,8 @@ class ExecutionManager:
                     if span:
                         span.end()
                     return ""
+
+            await self._warn_if_stalled(graph, config, session_id)
 
             result = self._publish_final_result(
                 state,

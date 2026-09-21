@@ -3,7 +3,11 @@
 import os
 from typing import Any, Optional
 
+import structlog
+
 from core.model_identifier import create_model_identifier
+
+logger = structlog.get_logger(__name__)
 
 _MODEL_PREFIX_MAP = {
     "deepseek": "openai",
@@ -41,6 +45,51 @@ def _resolve_openai_base_url(model_name: str, extra_kwargs: dict[str, Any]) -> s
     return None
 
 
+def _with_context_profile(model: Any) -> Any:
+    """Attach ``max_input_tokens`` so context compression can size itself.
+
+    deepagents picks summarization thresholds from the model's profile: with one
+    it triggers at a FRACTION of the window (85%, keeping 10%); without one it
+    falls back to a fixed 170,000-token trigger. That fallback is not a
+    conservative default — it is a number unrelated to the model in use, and for
+    any window smaller than it, summarization can never fire before the provider
+    rejects the request. Nothing warns; the middleware is installed and inert.
+
+    Models reached through a gateway carry no profile, because LangChain keys
+    profiles off provider model ids and a gateway's names are its own. So the
+    window is supplied here, from the deployment that knows it.
+
+    Absent or unparseable, the profile is left alone rather than guessed: a wrong
+    window is worse than none, since compression would then size itself to a
+    budget the provider does not honour.
+    """
+    raw = os.environ.get("AUTO_COMPACT_WINDOW")
+    if not raw:
+        return model
+    try:
+        window = int(raw)
+    except ValueError:
+        logger.warning("auto_compact_window_not_an_integer", value=raw)
+        return model
+    if window <= 0:
+        logger.warning("auto_compact_window_not_positive", value=window)
+        return model
+
+    profile = dict(getattr(model, "profile", None) or {})
+    # Never overwrite a real profile — a provider that publishes its own limits
+    # knows them better than an environment variable does.
+    if profile.get("max_input_tokens"):
+        return model
+    profile["max_input_tokens"] = window
+    try:
+        model.profile = profile
+    except Exception:  # noqa: BLE001 - pydantic models may forbid assignment
+        logger.warning("auto_compact_window_profile_not_settable", model=type(model).__name__)
+        return model
+    logger.info("auto_compact_window_applied", max_input_tokens=window)
+    return model
+
+
 def _create_model_for_provider(
     provider: str, model_name: str, api_key: str, **extra_kwargs: Any
 ) -> Any:
@@ -57,7 +106,7 @@ def _create_model_for_provider(
     if provider == "anthropic":
         from langchain_anthropic import ChatAnthropic
 
-        return ChatAnthropic(**kwargs)
+        return _with_context_profile(ChatAnthropic(**kwargs))
     if provider == "openai":
         base_url = _resolve_openai_base_url(model_name, extra_kwargs)
         if base_url:
@@ -65,7 +114,7 @@ def _create_model_for_provider(
             kwargs["use_responses_api"] = False
         from langchain_openai import ChatOpenAI
 
-        return ChatOpenAI(**kwargs)
+        return _with_context_profile(ChatOpenAI(**kwargs))
     raise ValueError(f"Unsupported provider: {provider}")
 
 

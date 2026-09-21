@@ -92,6 +92,7 @@ class ValuesPublisher(ABC):
         session_id: str,
         messages: list[dict[str, Any]],
         files: Optional[dict[str, Any]] = None,
+        usage: Optional[dict[str, int]] = None,
     ) -> None: ...
 
     @abstractmethod

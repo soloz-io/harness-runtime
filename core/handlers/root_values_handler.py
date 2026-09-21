@@ -22,6 +22,50 @@ from core.types import Event
 logger = structlog.get_logger(__name__)
 
 
+def extract_context_usage(messages: Any) -> Optional[dict[str, int]]:
+    """The newest model call's token usage, as the provider counted it.
+
+    Read from the LAST message carrying ``usage_metadata`` rather than summed
+    across the conversation: each call reports the size of the whole input it
+    was given, so the newest one already describes the current context. Adding
+    them would multiply-count every message that survived into the next call.
+
+    ``used`` is input + output + cache reads + cache writes — the total the
+    provider weighs against its window, which is the same basis opencode uses
+    for its own overflow check. Counting ``input_tokens`` alone under-reports
+    and lets an indicator look comfortable right up to a rejection.
+
+    Returns ``None`` when nothing reports usage (a turn with no model call, or a
+    provider that omits it) so the caller can leave the field off entirely
+    rather than publish a zero that would read as "no context used".
+    """
+    if not messages:
+        return None
+    for msg in reversed(messages):
+        meta = getattr(msg, "usage_metadata", None)
+        if not isinstance(meta, dict):
+            continue
+        inp = int(meta.get("input_tokens") or 0)
+        out = int(meta.get("output_tokens") or 0)
+        details = meta.get("input_token_details") or {}
+        cache_read = int(details.get("cache_read") or 0)
+        cache_write = int(details.get("cache_creation") or 0)
+        total = int(meta.get("total_tokens") or 0)
+        # `total_tokens` usually already includes cache reads; prefer it and
+        # fall back to the sum only when the provider omits it.
+        used = total or (inp + out + cache_read + cache_write)
+        if used <= 0:
+            continue
+        return {
+            "used": used,
+            "input": inp,
+            "output": out,
+            "cacheRead": cache_read,
+            "cacheWrite": cache_write,
+        }
+    return None
+
+
 class RootValuesHandler(EventHandler):
     """Handle coordinator values events (persist + publish snapshot)."""
 
@@ -62,7 +106,17 @@ class RootValuesHandler(EventHandler):
         # text, no question, and a turn that simply went quiet. The client's
         # pending-interaction lookup keys off that tool call, so without it no
         # prompt can ever render.
-        interrupt_val = data.get("__interrupt__")
+        #
+        # Read from `event.interrupts`, not from `data`. This was
+        # `data.get("__interrupt__")`, which is the name of the CHECKPOINT
+        # channel, not of anything the v3 stream emits — the protocol carries
+        # interrupts in `params.interrupts`, beside `data`. The lookup
+        # therefore always returned None, `_publish_interrupt` never ran, and
+        # the result frame went out with no questions in it. Two blocking
+        # `ask_user` clarifications were lost that way while the graph sat
+        # parked on them; the UI showed only "Thought for 86 seconds", and
+        # because the stream drained cleanly the turn was logged as completed.
+        interrupt_val = event.interrupts or None
 
         # ---- Messages for values channel ----
         msgs = data.get("messages", [])
@@ -104,6 +158,7 @@ class RootValuesHandler(EventHandler):
                     session_id=session_id,
                     messages=serialized,
                     files=state.last_files or None,
+                    usage=extract_context_usage(msgs),
                 )
 
         if interrupt_val is not None:
