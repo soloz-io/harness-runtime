@@ -122,6 +122,24 @@ class EventPublisher(ABC):
     ) -> None: ...
 
     @abstractmethod
+    def publish_task_queued(
+        self,
+        *,
+        session_id: str,
+        task: dict[str, Any],
+    ) -> None:
+        """Emit a non-blocking task_queued frame to the client.
+
+        Called by ``RootValuesHandler`` when the orchestrator invoked
+        ``task_queue()``.  The client adds the job to its task queue panel.
+
+        The payload is delivered as a ``ResultFrame`` with
+        ``subtype="task_queued"`` so it flows through the same SSE stream as
+        all other result frames without requiring a new frame type.
+        """
+        ...
+
+    @abstractmethod
     def close(self) -> None: ...
 
     def publish_message_finish(self) -> None:  # noqa: B027
@@ -279,5 +297,22 @@ class StdioPublisher(EventPublisher):
             ControlResponseFrame.success(
                 request_id=request_id,
                 **extra,
+            )
+        )
+
+    def publish_task_queued(self, *, session_id: str, task: dict[str, Any]) -> None:
+        """Emit a task_queued result frame.
+
+        Uses ``ResultFrame(subtype="task_queued")`` so it travels through the
+        same SSE stream as all other frames.  The ``interrupt`` field carries
+        the task payload — the client checks ``frame.subtype == "task_queued"``
+        and reads ``frame.interrupt.task`` to populate the task queue panel.
+        This does NOT pause the graph.
+        """
+        self._write(
+            ResultFrame(
+                subtype="task_queued",
+                session_id=session_id,
+                interrupt={"task": task},
             )
         )

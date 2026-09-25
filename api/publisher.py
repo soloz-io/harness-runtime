@@ -389,6 +389,28 @@ class SSEEventPublisher(EventPublisher):
             frame["interrupt"] = interrupt
         self._write(frame)
 
+    def publish_task_queued(self, *, session_id: str, task: dict[str, Any]) -> None:
+        """Emit a task_queued result frame — a mid-turn side channel.
+
+        Mirrors ``publish_result``'s frame shape so SSE consumers see one frame
+        family, but deliberately emits NO ``messages/message-finish`` protocol
+        event: that event is how a turn's message stream is closed, and this
+        frame fires while the turn is still running. The client branches on
+        ``subtype == "task_queued"`` and must leave its loading state alone.
+        """
+        self._write(
+            {
+                "type": "result",
+                "subtype": "task_queued",
+                "session_id": session_id,
+                "duration_ms": 0,
+                "is_error": False,
+                "num_turns": 1,
+                "result": None,
+                "interrupt": {"task": task},
+            }
+        )
+
     def publish_control_response(
         self, *, request_id: str, subtype: str = "success", **extra: Any
     ) -> None:

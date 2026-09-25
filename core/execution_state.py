@@ -30,3 +30,7 @@ class ExecutionState:
     subagent_values_messages_count: dict[Namespace, int] = field(default_factory=dict)
     workspace_id: str = ""
     app_id: str | None = None
+    # Pending task_queue payloads accumulated during the current superstep.
+    # Drained by RootValuesHandler after each values event so each job is
+    # emitted exactly once as a task_queued result frame to the client.
+    pending_task_queue: list[dict[str, Any]] = field(default_factory=list)

@@ -5,6 +5,7 @@ SRP: Handles coordinator-level values events:
 - Structured response / file extraction
 - DB projection of messages + files
 - Values channel publishing
+- task_queue side-channel emission
 """
 
 import time
@@ -17,6 +18,7 @@ from core.execution_state import ExecutionState
 from core.executor_helpers import extract_interrupt_payload, serialize_messages_for_values
 from core.handlers import EventHandler
 from core.message_writer import write_agent_output_files, write_chat_messages
+from core.middleware.human_interaction.task_queue import UNSCOPED_KEY, consume_task_queue_payloads
 from core.types import Event
 
 logger = structlog.get_logger(__name__)
@@ -160,6 +162,34 @@ class RootValuesHandler(EventHandler):
                     files=state.last_files or None,
                     usage=extract_context_usage(msgs),
                 )
+
+        # ---- task_queue side-channel ----
+        #
+        # If the orchestrator called task_queue() in this superstep, the tool
+        # body deposited a payload under this session's key (the graph's
+        # configurable.thread_id IS the session id). Consume it here — after
+        # values are published so the tool-call message is already visible in
+        # the UI — and emit one lightweight task_queued result frame per job.
+        # This does NOT stop the stream: execution continues, and the client
+        # monitors each run_id by polling the run status endpoint.
+        payloads = consume_task_queue_payloads(session_id)
+        if not payloads:
+            # Recorded outside a graph run (no thread_id in config): the tool
+            # fell back to the unscoped key. Drained here so direct
+            # invocations still surface.
+            payloads = consume_task_queue_payloads(UNSCOPED_KEY)
+        if payloads:
+            state.pending_task_queue.extend(payloads)
+
+        for task in state.pending_task_queue:
+            publisher.publish_task_queued(session_id=session_id, task=task)
+            logger.info(
+                "task_queued_emitted",
+                session_id=session_id,
+                job_name=task.get("job_name"),
+                run_id=task.get("run_id"),
+            )
+        state.pending_task_queue.clear()
 
         if interrupt_val is not None:
             self._publish_interrupt(

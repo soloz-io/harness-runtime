@@ -13,6 +13,8 @@ Three distinct HITL patterns exist:
 2. **Phase review** (e.g., `review_content`): Human reviews a completed deliverable and either approves, rejects with feedback, or edits the content directly.
 3. **Approval gate** (legacy `script_reviewer` pattern): Human approves, edits, or rejects a tool call before execution. Rejection returns feedback to the agent.
 
+A fourth tool registered alongside these — `task_queue` — is deliberately **not** a HITL pattern: it never pauses the graph and requires no human decision. It is documented here because it shares the `HumanInteractionMiddleware` registration and the `ResultFrame` side-channel vocabulary.
+
 These differ in semantics and `allowed_decisions`. Without a documented protocol, it's unclear which pattern applies when, and how the runtime should handle each.
 
 ## Decision
@@ -59,7 +61,7 @@ For `ask_user`, the resume value from `interrupt()` is the decisions payload; th
 
 ### Builtin HITL tool contracts
 
-Two builtin HITL tools are registered via `HumanInteractionMiddleware` (see ADR-010):
+Two builtin HITL tools are registered via `HumanInteractionMiddleware` (see ADR-010). The same middleware also carries `task_queue`, a **non-HITL** tool — it registers jobs without pausing the graph (see [`task_queue` — non-blocking job registration](#task_queue--non-blocking-job-registration-not-a-hitl-pattern)):
 
 ```python
 @tool("ask_user")
@@ -115,6 +117,49 @@ LLM calls review_content(phase_name="Script Review", content="...")
   → HumanInTheLoopMiddleware injects the decision as the ToolMessage content
   → Agent resumes
 ```
+
+### `task_queue` — non-blocking job registration (not a HITL pattern)
+
+`task_queue` reports a background job the orchestrator has just submitted (a
+specialist's `tts_cli` / `video_cli` call returned `{status: "QUEUED",
+run_id}`) so the playground can show a live "N tasks running" panel. It is
+symmetric with `ask_user` in *registration* but opposite in *behavior*:
+
+```
+LLM calls task_queue(job_name="Generating voice-over track", run_id="wpt_run_abc")
+  → tool body records {job_name, run_id, description} under the session's
+    pending list (keyed by configurable.thread_id — the session id)
+  → tool returns an acknowledgment string IMMEDIATELY — no interrupt() call
+  → graph continues to the next superstep
+  → RootValuesHandler drains this session's list after the values event
+      and emits one ResultFrame per job:
+        { type: "result", subtype: "task_queued", session_id,
+          duration_ms: 0, is_error: false, num_turns: 1,
+          interrupt: { task: { job_name, run_id, description } } }
+  → client adds the job to the task panel and polls
+      GET /api/v1/workflows/runs/{run_id}/status until terminal
+```
+
+Design points:
+
+- **Not in `interrupt_on`.** `HumanInTheLoopMiddleware` intercepts tool calls
+  *before* they execute; `task_queue` must run its body to record the payload,
+  so it is registered only in `HumanInteractionMiddleware.tools`.
+- **The `interrupt` field is reused as the side-channel** — it is already
+  `Optional[dict]` on `ResultFrame` and flows to the client unchanged.
+  `subtype="task_queued"` distinguishes it from `"interrupted"`; clients must
+  not treat it as a turn end (no `messages/message-finish` precedes it, and the
+  turn keeps streaming).
+- **No mid-turn state on the wire in either publisher**: `StdioPublisher` and
+  `SSEEventPublisher` both implement `publish_task_queued`, and the SSE variant
+  deliberately emits no `message-finish` protocol event, unlike `publish_result`.
+- **Session-keyed store, list-valued.** The HTTP server is multi-session by
+  design (`/session/{session_id}/message` + per-session `SessionState`), so a
+  process-global slot would let one session's job surface on another's stream;
+  list-valued entries allow several jobs queued in one superstep.
+- **Completion is client-driven by polling**, not by the orchestrator
+  re-calling `task_queue`, and not by matching the `[System Notification]`
+  chat message (whose payload carries no `run_id`).
 
 ### `blocking` field semantics
 

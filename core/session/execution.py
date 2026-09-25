@@ -17,8 +17,8 @@ MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024
 async def inline_object_attachments(
     attachments: Optional[list[dict[str, Any]]],
 ) -> Optional[list[dict[str, Any]]]:
-    """Download ``source.type == "object"`` attachments and return them as
-    inline base64 (``source.type == "data"``) instead.
+    """Download ``source.type == "object"`` **image** attachments and return
+    them as inline base64 (``source.type == "data"``) instead.
 
     The model provider is reached through AI_GATEWAY_BASE_URL
     (api.deepseek.com in this deployment). Handing it an object-storage URL
@@ -31,6 +31,12 @@ async def inline_object_attachments(
     — inside the cluster, where the bucket *is* reachable — and inlining the
     bytes removes the dependency on provider-side egress entirely.
 
+    Non-image attachments (voice notes) are left untouched: they are never
+    handed to the provider as blocks — only named as a text line in
+    ``_build_message_content`` — so there is nothing to fetch, and
+    downloading them would just burn the size budget on bytes the model
+    never sees.
+
     Raises on any download failure rather than silently dropping the image:
     a turn that quietly proceeds without an attachment the user explicitly
     supplied produces confidently wrong work.
@@ -42,7 +48,7 @@ async def inline_object_attachments(
     async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
         for a in attachments:
             source = a["source"]
-            if source["type"] != "object":
+            if source["type"] != "object" or not str(a.get("mime", "")).startswith("image/"):
                 result.append(a)
                 continue
 
@@ -91,10 +97,30 @@ def _build_message_content(
     to recite its source — so it can't be blamed for not forwarding what it
     was never actually given as text. The orchestrator's own
     `15-attachment-forwarding.md` instructions assume this text is present.
+
+    Non-image attachments (voice notes, kind ``audio``) get the text line
+    ONLY — ``[Attached audio: <url>]``. Emitting an image block for
+    ``audio/webm`` makes the provider answer ``400`` and the whole turn
+    dies; the SDK therefore sends every attachment through and trusts this
+    function to be the one translator. The model still receives the URL as
+    readable text, which is all it can act on: providers in this deployment
+    take no audio input, and consuming/transcribing the note is a follow-up.
     """
     content: list[dict[str, Any]] = [{"type": "text", "text": user_content}] if user_content else []
     for a in attachments or []:
         source = a["source"]
+        is_image = str(a.get("mime", "")).startswith("image/")
+        if not is_image:
+            # Never inline base64 into the message: for an object source the
+            # URL is the citable reference; for a data source (forward
+            # compat only — v1 always uploads first) fall back to filename
+            # or mime rather than dumping the bytes into readable text.
+            if source["type"] == "object":
+                ref = source["value"]
+            else:
+                ref = a.get("filename") or a["mime"]
+            content.append({"type": "text", "text": f"[Attached {a.get('kind', 'file')}: {ref}]"})
+            continue
         if source["type"] == "object":
             content.append({"type": "text", "text": f"[Attached image: {source['value']}]"})
             content.append(
