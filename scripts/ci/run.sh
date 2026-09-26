@@ -27,8 +27,8 @@ if [ -n "${HARNESS_PACK_URL:-}" ]; then
         echo "ERROR: could not retrieve the agent pack from ${HARNESS_PACK_URL}"
         exit 1
     }
-    export HARNESS_IMAGE_DIR="${HARNESS_PACK_DIR:-/app/pack}/agents"
-    export HARNESS_TOOLS_BIN_DIR="${HARNESS_PACK_DIR:-/app/pack}/bin"
+    export HARNESS_IMAGE_DIR="${HARNESS_PACK_DIR:-/tmp/pack}/agents"
+    export HARNESS_TOOLS_BIN_DIR="${HARNESS_PACK_DIR:-/tmp/pack}/bin"
     echo "  HARNESS_IMAGE_DIR: ${HARNESS_IMAGE_DIR} (from pack)"
 fi
 

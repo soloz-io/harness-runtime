@@ -11,7 +11,15 @@ from pathlib import Path
 
 import pytest
 
-from core.session.pack import ENV_PACK_DIR, ENV_PACK_URL, PackError, ensure_pack, fetch_pack
+from core.session.pack import (
+    DEFAULT_PACK_DIR,
+    ENV_PACK_DIR,
+    ENV_PACK_URL,
+    PackError,
+    ensure_pack,
+    fetch_pack,
+    pack_dir,
+)
 
 
 def _tar(entries: dict[str, str], *, link: str | None = None) -> bytes:
@@ -131,3 +139,18 @@ def test_the_pack_url_is_all_a_session_needs_to_be_pointed_at(serve, tmp_path, m
 
     assert dest == Path(os.environ[ENV_PACK_DIR])
     assert (dest / "agents" / "orchestrator").is_dir()
+
+
+def test_the_default_lands_somewhere_the_sandbox_can_write(monkeypatch):
+    """The sandbox runs with a read-only root filesystem.
+
+    /app is not writable there, so a default under it fails at mkdir before the
+    fetch is even attempted -- the pod then crash-loops with a traceback rather
+    than starting. Of the volumes that are writable, /shared is the credential
+    channel and /workspace is the session's own tree, which for a durable
+    workspace is checkpointed to object storage.
+    """
+    monkeypatch.delenv(ENV_PACK_DIR, raising=False)
+
+    assert DEFAULT_PACK_DIR.startswith("/tmp/")
+    assert str(pack_dir()) == DEFAULT_PACK_DIR

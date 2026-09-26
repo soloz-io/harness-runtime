@@ -33,9 +33,15 @@ logger = structlog.get_logger(__name__)
 ENV_PACK_URL = "HARNESS_PACK_URL"
 
 # Where it is unpacked. Overridable for tests and for running outside the
-# container; the default is inside /app, which the image gives appuser.
+# container.
+#
+# Under /tmp because the sandbox runs with a read-only root filesystem: /app is
+# not writable, and of the three volumes that are, /shared is the credential
+# channel and /workspace is the session's own tree — which for a durable
+# workspace is a PVC checkpointed to object storage, so a pack unpacked there
+# would both bury the agent's files and be uploaded with them.
 ENV_PACK_DIR = "HARNESS_PACK_DIR"
-DEFAULT_PACK_DIR = "/app/pack"
+DEFAULT_PACK_DIR = "/tmp/pack"
 
 _FETCH_TIMEOUT_SECONDS = 60
 
