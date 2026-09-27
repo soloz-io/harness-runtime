@@ -26,7 +26,7 @@ from core.session.tools import (
 def _definition(node_ids: list[str]) -> dict:
     return {
         "name": "test-agents",
-        "topology": "agent-dag",
+        "topology": "star",
         "nodes": [
             {
                 "id": nid,

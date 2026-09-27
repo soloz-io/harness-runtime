@@ -52,7 +52,7 @@ def image_skills_dir(tmp_path: Path) -> Path:
 def _definition(skills: list[str]) -> dict:
     return {
         "name": "test-agents",
-        "topology": "agent-dag",
+        "topology": "star",
         "nodes": [
             {
                 "id": "orchestrator",
@@ -216,7 +216,7 @@ def _session_definition(skills: list[str]) -> dict:
     """Definition with a model config so Session.extract_agent_config passes."""
     return {
         "name": "test-agents",
-        "topology": "agent-dag",
+        "topology": "star",
         "nodes": [
             {
                 "id": "orchestrator",

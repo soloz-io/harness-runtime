@@ -30,8 +30,8 @@ def build_agent_from_definition(
     """
     Build a complete LangGraph graph from an agent definition.
 
-    Delegates to the appropriate topology builder (star or acrylic)
-    based on the definition.
+    Delegates to the topology builder the definition names: star, composite or
+    acrylic.
     """
     # 1. Resolve all tools from the ToolRegistry
     tool_definitions = definition.get("tool_definitions", [])
@@ -41,6 +41,13 @@ def build_agent_from_definition(
     )
 
     # 2. Determine topology
+    #
+    # Three values, and every one of them is a DAG -- which is why none of them
+    # says so. ``star`` is an orchestrator with specialists around it, ``composite``
+    # is that with specialists that may nest their own subagents, and
+    # ``acrylic`` is a code-enforced graph whose edges carry conditions. An absent
+    # value is read from the edges: acrylic when any edge carries one, star
+    # otherwise.
     topology = definition.get("topology", "")
 
     # Composite: one orchestrator over a mix of declarative subagents, nested
@@ -65,9 +72,9 @@ def build_agent_from_definition(
         )
 
     is_acrylic = False
-    if topology in ("custom", "acrylic"):
+    if topology == "acrylic":
         is_acrylic = True
-    elif topology == "agent-dag":
+    elif topology == "star":
         is_acrylic = False
     else:
         edges = definition.get("edges", [])
