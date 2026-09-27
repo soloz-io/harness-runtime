@@ -20,17 +20,22 @@ fi
 # startup, so a pack that arrived later would leave this session with no skills
 # and no tools while answering its health probe perfectly.
 #
-# No pack URL means a sandbox image that carries its own content; nothing to do.
-if [ -n "${HARNESS_PACK_URL:-}" ]; then
-    echo "  HARNESS_PACK_URL: ${HARNESS_PACK_URL}"
-    python -c 'from core.session.pack import ensure_pack; ensure_pack()' || {
-        echo "ERROR: could not retrieve the agent pack from ${HARNESS_PACK_URL}"
-        exit 1
-    }
-    export HARNESS_IMAGE_DIR="${HARNESS_PACK_DIR:-/tmp/pack}/agents"
-    export HARNESS_TOOLS_BIN_DIR="${HARNESS_PACK_DIR:-/tmp/pack}/bin"
-    echo "  HARNESS_IMAGE_DIR: ${HARNESS_IMAGE_DIR} (from pack)"
+# Required. This image carries no agent content, so a session without a pack is a
+# session with no prompts, no tools and no skills -- which starts, passes its
+# health probe, and behaves as though every agent had been given an empty brief.
+if [ -z "${HARNESS_PACK_URL:-}" ]; then
+    echo "ERROR: HARNESS_PACK_URL is not set. This image carries no agent content;"
+    echo "       the pack is fetched from the runtime that served the definition."
+    exit 1
 fi
+echo "  HARNESS_PACK_URL: ${HARNESS_PACK_URL}"
+python -c 'from core.session.pack import ensure_pack; ensure_pack()' || {
+    echo "ERROR: could not retrieve the agent pack from ${HARNESS_PACK_URL}"
+    exit 1
+}
+export HARNESS_IMAGE_DIR="${HARNESS_PACK_DIR:-/tmp/pack}/agents"
+export HARNESS_TOOLS_BIN_DIR="${HARNESS_PACK_DIR:-/tmp/pack}/bin"
+echo "  HARNESS_IMAGE_DIR: ${HARNESS_IMAGE_DIR} (from pack)"
 
 # Source proxy config from Agent Vault sidecar (shared volume)
 if [ -f /shared/proxy.env ]; then

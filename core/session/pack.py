@@ -115,14 +115,19 @@ def fetch_pack(url: str, dest: Path) -> Path:
     return dest
 
 
-def ensure_pack() -> Path | None:
-    """Fetch the pack this session was pointed at, if it was pointed at one.
+def ensure_pack() -> Path:
+    """Fetch the pack this session was pointed at.
 
-    Returns the directory it was unpacked into, or ``None`` when no pack URL is
-    set — which is how a sandbox image carrying its own content still runs while
-    products move onto the contract.
+    Raises :class:`PackError` when no pack URL is set. There is nothing to fall
+    back to: a sandbox image carries no agent content, so a session that started
+    without its pack would run every agent with no instructions while answering
+    its health probe perfectly.
     """
     url = os.environ.get(ENV_PACK_URL)
     if not url:
-        return None
+        raise PackError(
+            f"{ENV_PACK_URL} is not set, so this session has no agent pack to read. "
+            "The SDK sets it from the runtime that served the definition; a sandbox "
+            "image carries no prompts, tools or skills of its own."
+        )
     return fetch_pack(url, pack_dir())

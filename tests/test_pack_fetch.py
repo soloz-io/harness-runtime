@@ -123,11 +123,17 @@ def test_a_link_in_the_archive_is_refused(serve, tmp_path):
         fetch_pack("http://serve/packs/oranger/content", tmp_path / "pack")
 
 
-def test_no_pack_url_means_a_sandbox_carrying_its_own_content(monkeypatch):
-    # What keeps products moving onto the contract one at a time: an image that
-    # still bakes its agents in runs unchanged.
+def test_no_pack_url_is_a_hard_failure(monkeypatch):
+    """There is nothing to fall back to.
+
+    The sandbox image carries no agent content, so a session that continued
+    without its pack would run every agent with no instructions and answer its
+    health probe perfectly while doing it.
+    """
     monkeypatch.delenv(ENV_PACK_URL, raising=False)
-    assert ensure_pack() is None
+
+    with pytest.raises(PackError, match=ENV_PACK_URL):
+        ensure_pack()
 
 
 def test_the_pack_url_is_all_a_session_needs_to_be_pointed_at(serve, tmp_path, monkeypatch):
