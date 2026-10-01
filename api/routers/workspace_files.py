@@ -28,7 +28,7 @@ does not know what a checkpoint contains, and holds no object-store credential
 (ADR-037 §1). It forwards a request a human made.
 
 
-Auth reuses ``WAYPOINT_INTERNAL_TOKEN``, the same convention as ``preview.py``.
+Auth is the SDK's internal token, checked by digest (``api.internal_auth``).
 """
 
 from __future__ import annotations
@@ -42,6 +42,8 @@ from typing import Any, Optional
 import structlog
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
+
+from api.internal_auth import is_internal_caller
 
 logger = structlog.get_logger(__name__)
 
@@ -88,12 +90,7 @@ _MAX_DOWNLOAD_UNCOMPRESSED_BYTES = 100 * 1024 * 1024  # 100 MiB uncompressed lim
 
 
 def _is_authorized(token: Optional[str]) -> bool:
-    if os.environ.get("WAYPOINT_ENV") == "local":
-        return True
-    expected = os.environ.get("WAYPOINT_INTERNAL_TOKEN")
-    if not expected:
-        return os.environ.get("WAYPOINT_ENV") != "production"
-    return token == expected
+    return is_internal_caller(token)
 
 
 def _require_auth(request: Request) -> None:

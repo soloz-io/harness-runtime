@@ -2,7 +2,7 @@
 Preview streaming — ADR-036 §7 (enterprise-hardening plan).
 
 All routes behind the same auth check (§2 of the hardening plan — reuses
-``WAYPOINT_INTERNAL_TOKEN``, the SDK's own ``/internal/*`` convention, rather
+``x-waypoint-internal-token``, the SDK's own ``/internal/*`` convention, rather
 than inventing a new one):
 
 - HTTP proxy to Metro's own server (``localhost:8081``) — allowlisted (§3),
@@ -26,12 +26,12 @@ than as a removed feature.
 """
 
 import json
-import os
 from typing import Optional
 
 import structlog
 from fastapi import APIRouter, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 
+from api.internal_auth import is_internal_caller
 from core.metro.config import METRO_URL
 from core.metro.supervisor import (
     ensure_metro_running,
@@ -46,18 +46,11 @@ logger = structlog.get_logger(__name__)
 router = APIRouter(tags=["preview"])
 
 
-# ── Auth (§2: reuse WAYPOINT_INTERNAL_TOKEN, the SDK's own convention) ─────
+# ── Auth (§2: the SDK's internal token, checked by digest — api.internal_auth) ─
 
 
 def _is_authorized(token: Optional[str]) -> bool:
-    if os.environ.get("WAYPOINT_ENV") == "local":
-        return True
-    expected = os.environ.get("WAYPOINT_INTERNAL_TOKEN")
-    if not expected:
-        # Matches the SDK's own isInternalAuthorized: unset token is only
-        # tolerated outside production.
-        return os.environ.get("WAYPOINT_ENV") != "production"
-    return token == expected
+    return is_internal_caller(token)
 
 
 def _require_auth_http(request: Request) -> None:
