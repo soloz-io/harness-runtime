@@ -82,7 +82,7 @@ If the middleware provides tools, it follows the builtin tool pattern (see ADR-0
 ## References
 
 - `core/star_topology.py`: Middleware stack for star topology orchestrator
-- `core/node_compiler.py`: `build_node_middleware()` for acrylic topology nodes
+- `core/graph/node_compiler.py`: `build_node_middleware()` for acrylic topology nodes
 - `core/subagent_builder.py`: `_build_compiled_subagent()` for specialist subagents
 - `deepagents/graph.py`: `_REQUIRED_MIDDLEWARE` definition (line ~205)
 - `langchain/agents/factory.py`: `create_agent()` middleware collection logic (line ~894)

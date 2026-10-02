@@ -249,7 +249,7 @@ def resolve_structured_output_model(
         A model instance (ChatOpenAI, ChatAnthropic, etc.) or a
         model identifier string if no special handling is needed.
     """
-    from core.model_factory import ModelFactory
+    from core.llm.factory import ModelFactory
 
     model_identifier = ModelFactory.resolve_model_identifier(
         provider=provider,

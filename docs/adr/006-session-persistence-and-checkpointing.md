@@ -56,6 +56,6 @@ The `Session` object tracks `self.turns` (incremented on each `run_turn()` or `r
 ## References
 
 - `core/session.py`: `Session` class, session_id generation, turn tracking
-- `core/executor.py`: `ExecutionManager.execute()`, interrupt detection, resume via `Command(resume=...)`
+- `core/execution/executor.py`: `ExecutionManager.execute()`, interrupt detection, resume via `Command(resume=...)`
 - `cli.py`: Main loop — creates `ExecutionManager` with `PostgresSaver`, handles `resume_payload` in initialize
 - `migrations/`: LangGraph checkpoint table migrations

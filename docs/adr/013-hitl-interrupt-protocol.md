@@ -193,8 +193,8 @@ The orchestrator prompt uses `blocking` to decide whether the specialist can pro
 ## References
 
 - `core/star_topology.py`: `interrupt_on` passed to `create_deep_agent()`
-- `core/node_compiler.py`: `HumanInTheLoopMiddleware(interrupt_on=...)` in `build_node_middleware()`
-- `core/executor.py`: Interrupt detection and resume via `Command(resume=...)`
+- `core/graph/node_compiler.py`: `HumanInTheLoopMiddleware(interrupt_on=...)` in `build_node_middleware()`
+- `core/execution/executor.py`: Interrupt detection and resume via `Command(resume=...)`
 - `core/ask_user.py`: `ask_user` tool definition with `type` and `blocking` parameters
 - `core/review_content.py`: `review_content` tool for phase output review
 - `core/human_interaction.py`: `HumanInteractionMiddleware` — bundles both HITL tools into a single middleware

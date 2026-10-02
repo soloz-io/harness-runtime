@@ -55,7 +55,7 @@ def test_both_path_shapes_resolve_to_the_same_file(workspace):
     The listing returns paths relative to the root; the agent, the transcript
     and every tool speak absolute /workspace/... . Joining the absolute form
     onto the root without stripping it yields /workspace/workspace/... — the
-    doubling documented in core/agent_backend.py, which surfaced as
+    doubling documented in core/workspace/agent_backend.py, which surfaced as
     path_not_found rather than as anything about paths.
     """
     module, root = workspace

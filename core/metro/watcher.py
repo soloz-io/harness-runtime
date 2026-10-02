@@ -20,7 +20,7 @@ import structlog
 
 from core.metro.checkpoint_trigger import schedule_checkpoint
 from core.metro.config import HAS_WEBSOCKETS, METRO_URL
-from core.workspace_context import get_active_workspace_id
+from core.workspace.context import get_active_workspace_id
 
 logger = structlog.get_logger(__name__)
 

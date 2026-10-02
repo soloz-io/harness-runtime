@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from core.backends.db import DBBackend
+from core.workspace.backends.db import DBBackend
 
 
 class _FakePool:

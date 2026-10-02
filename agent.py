@@ -11,7 +11,7 @@ from typing import Optional
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
-from core.factory import build_agent_from_definition
+from core.graph.factory import build_agent_from_definition
 
 
 def load_definition(path: Path) -> dict:

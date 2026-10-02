@@ -382,7 +382,7 @@ metadata:
 Once migration is complete, the Agent Executor service can use PostgresSaver:
 
 ```python
-# In agent_executor/core/executor.py
+# In agent_executor/core/execution/executor.py
 from langgraph.checkpoint.postgres import PostgresSaver
 import psycopg
 

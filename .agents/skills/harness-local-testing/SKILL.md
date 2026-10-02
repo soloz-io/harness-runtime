@@ -423,8 +423,8 @@ has `AI_GATEWAY_API_KEY` directly. Ensure both `.env` files exist.
 |------|---------|
 | `cli.py` | HTTP server entry point (uvicorn + Redis event bus) |
 | `core/session.py` | Session lifecycle, `_init_skills()` builds `CompositeBackend` with `FilesystemBackend(virtual_mode=True)` |
-| `core/topology/star_topology.py` | Builds orchestrator + subagents from agent definition |
-| `core/topology/subagent_builder.py` | Builds declarative `SubAgent` specs |
+| `core/graph/topology/star_topology.py` | Builds orchestrator + subagents from agent definition |
+| `core/graph/topology/subagent_builder.py` | Builds declarative `SubAgent` specs |
 | `core/integration/git_backend.py` | Clones skills repo to temp directory (uses `AGENTREGISTRY_GITHUB_TOKEN` for local auth) |
 | `api/routers/sessions.py` | HTTP handlers: POST message, GET event SSE stream (catches `GitBackendError` as 400) |
 | `api/publisher.py` | `SSEEventPublisher`: writes protocol events to Redis; `publish_result()` emits `type: "result"` frame |

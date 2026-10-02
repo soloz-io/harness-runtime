@@ -239,7 +239,7 @@ WHERE tablename LIKE 'checkpoint%';
 
 ## Integration with Agent Executor
 
-The Agent Executor service (`/root/development/bizmatters/services/agent_executor/core/executor.py`) already has PostgresSaver integration:
+The Agent Executor service (`/root/development/bizmatters/services/agent_executor/core/execution/executor.py`) already has PostgresSaver integration:
 
 ```python
 # From executor.py lines 28-136

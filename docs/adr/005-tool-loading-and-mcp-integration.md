@@ -56,10 +56,10 @@ Middleware-provided tools are always available regardless of the `tools` array. 
 
 ## References
 
-- `core/tool_loader.py`: `load_tools_from_definition()`, `exec()`-based tool loading
+- `core/tools/loader.py`: `load_tools_from_definition()`, `exec()`-based tool loading
 - `core/mcp_loader.py`: `load_mcp_tools_from_servers()`, `MCPServerHandle`
-- `core/factory.py`: Tool loading orchestration
-- `core/node_compiler.py`: Tool resolution for acrylic topology nodes
+- `core/graph/factory.py`: Tool loading orchestration
+- `core/graph/node_compiler.py`: Tool resolution for acrylic topology nodes
 - `core/star_topology.py`: Tool resolution for star topology orchestrator
 - `core/ask_user.py`: Builtin `ask_user` tool via `AskUserMiddleware` — middleware pathway example
 - ADR-010: Builtin Tool Architecture — detailed rationale for the middleware pathway

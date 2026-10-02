@@ -64,9 +64,9 @@ Both builders share:
 
 ## References
 
-- `core/factory.py`: Selects topology builder based on definition
+- `core/graph/factory.py`: Selects topology builder based on definition
 - `core/star_topology.py`: Star topology implementation
 - `core/acrylic_topology.py`: Acrylic topology implementation
-- `core/node_compiler.py`: Per-node compilation (used by acrylic)
+- `core/graph/node_compiler.py`: Per-node compilation (used by acrylic)
 - `core/subagent_builder.py`: Subagent compilation (used by star)
 - ADR-009: Per-Node Message Isolation in Acrylic Topology

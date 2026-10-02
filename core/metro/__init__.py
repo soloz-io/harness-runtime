@@ -11,7 +11,7 @@ Metro/HMR — the ADR-033 §6.1 checkpoint trigger, ported from opencode's
   HMR boundary hook (no longer persists anything — see checkpoint_trigger)
 - ``config``: ``METRO_URL``/``METRO_PORT``/``CHECKPOINT_DEBOUNCE_SECONDS``
 
-Call sites (``core/session/session.py``, ``core/topology/
+Call sites (``core/session/session.py``, ``core/graph/topology/
 composite_topology.py``) only ever import ``ensure_metro_running`` and
 ``ensure_watcher_running`` from here.
 """

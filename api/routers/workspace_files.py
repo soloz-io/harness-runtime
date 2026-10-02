@@ -43,7 +43,7 @@ import structlog
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
-from api.internal_auth import is_internal_caller
+from api.internal_auth import is_in_pod_caller, is_internal_caller
 
 logger = structlog.get_logger(__name__)
 
@@ -94,6 +94,8 @@ def _is_authorized(token: Optional[str]) -> bool:
 
 
 def _require_auth(request: Request) -> None:
+    if is_in_pod_caller(request.client.host if request.client else None):
+        return
     if not _is_authorized(request.headers.get("x-waypoint-internal-token")):
         raise HTTPException(status_code=401, detail="Missing or invalid x-waypoint-internal-token")
 
@@ -107,7 +109,7 @@ def _resolve_within_root(rel_path: str) -> Path:
     returns paths relative to the root, while the agent, the LLM transcript and
     every tool speak absolute ``/workspace/...``. Joining the absolute form onto
     the root without stripping it produces ``/workspace/workspace/...`` — the
-    exact doubling documented in ``core/agent_backend.py``, where it surfaced as
+    exact doubling documented in ``core/workspace/agent_backend.py``, where it surfaced as
     ``path_not_found`` on a live pod rather than as anything about paths.
 
     Second, containment. The value arrives in a query parameter, so

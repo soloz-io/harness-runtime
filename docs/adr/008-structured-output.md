@@ -77,4 +77,4 @@ The star topology does not use this middleware because conditional edges do not 
 
 - `core/structured_output.py`: `build_tool_strategy()`, `resolve_structured_output_model()`, `StructuredOutputMappingMiddleware`, monkey-patch
 - `core/star_topology.py`: Structured output passed to `create_deep_agent()` for star topology
-- `core/node_compiler.py`: Structured output passed to `create_agent()` for acrylic topology
+- `core/graph/node_compiler.py`: Structured output passed to `create_agent()` for acrylic topology

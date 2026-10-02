@@ -36,3 +36,15 @@ def is_internal_caller(token: Optional[str]) -> bool:
         return False
     presented = hashlib.sha256(token.encode("utf-8")).hexdigest()
     return hmac.compare_digest(presented, expected)
+
+
+# Loopback is reachable only from inside this pod: the agent's own tools (a
+# bootstrap script asking for Metro, say) and nothing else. They share this
+# process's trust boundary already -- they could read its environment -- so
+# they are let in without a credential rather than handed one. The SDK never
+# arrives on loopback; it reaches the pod's own address.
+_LOOPBACK = {"127.0.0.1", "::1", "localhost"}
+
+
+def is_in_pod_caller(client_host: Optional[str]) -> bool:
+    return (client_host or "") in _LOOPBACK

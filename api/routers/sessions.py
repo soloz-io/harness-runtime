@@ -14,7 +14,7 @@ from fastapi import APIRouter, HTTPException
 from sse_starlette.sse import EventSourceResponse
 
 from api.publisher import _SENTINEL, SSEEventPublisher, _stream_key
-from core.executor import ExecutionManager
+from core.execution.executor import ExecutionManager
 from core.services import get_services
 from core.session import Session
 from core.session.skills import SkillsError
@@ -371,7 +371,7 @@ async def handle_message(session_id: str, body: dict[str, Any]) -> dict[str, Any
     execution_manager = _get_execution_manager()
 
     if restore_checkpoint_id:
-        from core.checkpoint_restore import apply_checkpoint_restore
+        from core.restore.checkpoint import apply_checkpoint_restore
 
         checkpointer = execution_manager._async_checkpointer or execution_manager.checkpointer
         try:
@@ -417,7 +417,7 @@ async def handle_message(session_id: str, body: dict[str, Any]) -> dict[str, Any
     # System messages: write the notification row (for the audio-player UI),
     # then fall through to a user-role graph turn so the agent is informed.
     if role == "system" and message:
-        from core.message_writer import write_chat_messages
+        from core.persistence.message_writer import write_chat_messages
 
         system_msg = {"type": "system", "content": message}
         pool = getattr(_get_execution_manager(), "_pool", None)
@@ -467,7 +467,7 @@ async def handle_message(session_id: str, body: dict[str, Any]) -> dict[str, Any
     # here rather than at import, where the checkpointer does not exist yet. It
     # must happen BEFORE any session is built or resumed: a Session constructed
     # from the old head would carry exactly the messages the undo discarded.
-    from core.pending_restore import apply_pending_agent_restore
+    from core.restore.pending import apply_pending_agent_restore
 
     _checkpointer = execution_manager._async_checkpointer or execution_manager.checkpointer
     try:

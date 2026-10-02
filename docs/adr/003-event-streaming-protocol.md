@@ -57,9 +57,9 @@ This ADR defines a streaming protocol architecture and does not own platform res
 
 ## References
 
-- `core/executor.py`: `_process_v3_event()`, `_handle_lifecycle()`, `_handle_subagent_message()`, `_handle_root_message()`, `_handle_root_tools()`
+- `core/execution/executor.py`: `_process_v3_event()`, `_handle_lifecycle()`, `_handle_subagent_message()`, `_handle_root_message()`, `_handle_root_tools()`
 - `api/publisher.py`: `SSEEventPublisher.publish_message_finish()`
-- `core/event_publisher.py`: `EventPublisher.publish_message_finish()` (ABC default)
+- `core/publishers/event_publisher.py`: `EventPublisher.publish_message_finish()` (ABC default)
 - https://docs.langchain.com/oss/python/deepagents/event-streaming — official deepagents event-streaming docs, Pattern 2 (raw protocol events)
 - `langgraph/stream/run_stream.py`: `GraphRunStream`, `AsyncGraphRunStream` — `__iter__` / `__aiter__` consuming raw `ProtocolEvent` dicts
 - `langgraph/stream/_types.py`: `ProtocolEvent` type definition

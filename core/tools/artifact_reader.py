@@ -7,7 +7,7 @@ fetch file content written by the agent (via ``write_file``) directly from the
 agent scripts contain **zero SQL, zero credentials, and zero connection
 strings**, and agents cannot edit or corrupt the query at runtime.
 
-Scope semantics mirror ``core.message_writer.write_agent_output_files``
+Scope semantics mirror ``core.persistence.message_writer.write_agent_output_files``
 (``agent_output_files.session_id`` is a *scope key*, not necessarily the
 executing session):
 
@@ -56,7 +56,7 @@ def _normalize_filepath(file_path: str) -> str:
 
 
 def _scope_key(filepath: str, session_id: str, workspace_id: str, app_id: Optional[str]) -> str:
-    """Mirror ``core.message_writer._file_scope_key``."""
+    """Mirror ``core.persistence.message_writer._file_scope_key``."""
     if app_id and workspace_id and workspace_id == app_id:
         return app_id
     if app_id and filepath.startswith(".global/"):
@@ -149,7 +149,7 @@ def write_artifact_to_db(
     DB, so the DB-backed UI file browser never learns those files exist even
     though the rest of the pipeline reads them from disk correctly. Call this
     right after writing to disk — it mirrors
-    ``core.message_writer.write_agent_output_files``'s upsert exactly (same
+    ``core.persistence.message_writer.write_agent_output_files``'s upsert exactly (same
     table, same ON CONFLICT semantics, same scope-key rule) so a CLI tool's
     output shows up in the UI the same way the agent's own ``write_file``
     calls already do. This function never touches the filesystem itself.

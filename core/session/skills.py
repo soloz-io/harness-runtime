@@ -91,7 +91,7 @@ class SkillsManager:
         self._create_scratch(skill_routes)
 
         # Build per-agent skill wrapper routes
-        from core.skill_router import AgentSkillRouter
+        from core.session.skill_router import AgentSkillRouter
 
         self._router = AgentSkillRouter(self._agent_definition, self._tmp_dirs)
         skill_routes.update(self._router.build_routes())

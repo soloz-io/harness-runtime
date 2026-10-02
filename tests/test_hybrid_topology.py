@@ -12,9 +12,9 @@ from typing import Any
 
 from langgraph.checkpoint.memory import MemorySaver
 
-from core.factory import build_agent_from_definition
-from core.topology.acrylic_topology import AcrylicTopologyBuilder
-from core.topology.hybrid_topology import HybridTopologyBuilder
+from core.graph.factory import build_agent_from_definition
+from core.graph.topology.acrylic_topology import AcrylicTopologyBuilder
+from core.graph.topology.hybrid_topology import HybridTopologyBuilder
 
 SENTINEL_RUNNABLE = object()
 SENTINEL_SUBGRAPH = object()
@@ -110,7 +110,7 @@ def test_dispatch_mixed_specialists(monkeypatch: Any) -> None:
     subgraph_calls: list[dict[str, Any]] = []
     subagent_builds: list[dict[str, Any]] = []
 
-    import core.topology.hybrid_topology as hybrid_mod
+    import core.graph.topology.hybrid_topology as hybrid_mod
 
     def fake_build_subagent(
         config: dict[str, Any],
@@ -192,7 +192,7 @@ def test_missing_orchestrator_falls_back_to_first_node(monkeypatch: Any) -> None
 
     deep_agent_calls: list[tuple[dict[str, Any], str | None, list[Any] | None]] = []
 
-    import core.topology.hybrid_topology as hybrid_mod
+    import core.graph.topology.hybrid_topology as hybrid_mod
 
     def fake_build_subagent(
         config: dict[str, Any],
@@ -250,7 +250,7 @@ def test_factory_selects_hybrid_and_forwards_kwargs(monkeypatch: Any) -> None:
         captured.update(kwargs)
         return SENTINEL_RUNNABLE
 
-    import core.factory as factory_mod
+    import core.graph.factory as factory_mod
 
     monkeypatch.setattr(factory_mod.HybridTopologyBuilder, "build", fake_hybrid_build)
 

@@ -19,7 +19,7 @@ def build_db_backend(
     if pool is None:
         return None
     try:
-        from core.backends.db import DBBackend
+        from core.workspace.backends.db import DBBackend
 
         return DBBackend(
             workspace_id=workspace_id,
@@ -37,7 +37,7 @@ def build_s3_backend(root_dir: str = "/") -> Any:
     ``root_dir`` is the filesystem root (``"/"``), not ``"/workspace"``. Every
     other path convention here treats ``/workspace/...`` as a real absolute
     path — the DB backend's path handling, ``shell_middleware``'s SKILLS_BASE,
-    ``embedded_tool_loader``'s WORKSPACE_ROOT, and critically
+    ``core.tools.embedded_loader``'s WORKSPACE_ROOT, and critically
     ``subagent_builder``'s FilesystemPermission ACLs (``paths=["/workspace/**"]``).
     With ``virtual_mode=True`` resolving as ``root_dir / path``, a root of
     ``/workspace`` would make the agent's own ``/workspace/...`` calls resolve to

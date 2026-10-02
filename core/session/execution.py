@@ -4,8 +4,8 @@ from typing import Any, Optional
 import httpx
 import structlog
 
-from core.factory import build_agent_from_definition
-from core.tool_registry import ToolRegistry
+from core.graph.factory import build_agent_from_definition
+from core.tools.registry import ToolRegistry
 
 logger = structlog.get_logger(__name__)
 
@@ -216,7 +216,7 @@ def build_graph(
 
 def initialize_tool_registry(agent_definition: dict[str, Any]) -> ToolRegistry:
     """Load tool definitions from the agent definition into a fresh ToolRegistry."""
-    from core.embedded_tool_loader import ToolLoadingError, load_tool_implementations
+    from core.tools.embedded_loader import ToolLoadingError, load_tool_implementations
 
     registry = ToolRegistry()
     tool_definitions = agent_definition.get("tool_definitions", [])

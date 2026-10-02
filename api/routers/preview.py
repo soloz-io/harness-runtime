@@ -31,7 +31,7 @@ from typing import Optional
 import structlog
 from fastapi import APIRouter, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 
-from api.internal_auth import is_internal_caller
+from api.internal_auth import is_in_pod_caller, is_internal_caller
 from core.metro.config import METRO_URL
 from core.metro.supervisor import (
     ensure_metro_running,
@@ -39,7 +39,7 @@ from core.metro.supervisor import (
     node_modules_install_in_progress,
     wait_for_metro_ready,
 )
-from core.workspace_context import get_active_app_id
+from core.workspace.context import get_active_app_id
 
 logger = structlog.get_logger(__name__)
 
@@ -54,11 +54,15 @@ def _is_authorized(token: Optional[str]) -> bool:
 
 
 def _require_auth_http(request: Request) -> None:
+    if is_in_pod_caller(request.client.host if request.client else None):
+        return
     if not _is_authorized(request.headers.get("x-waypoint-internal-token")):
         raise HTTPException(status_code=401, detail="Missing or invalid x-waypoint-internal-token")
 
 
 async def _require_auth_ws(websocket: WebSocket) -> bool:
+    if is_in_pod_caller(websocket.client.host if websocket.client else None):
+        return True
     if not _is_authorized(websocket.headers.get("x-waypoint-internal-token")):
         await websocket.close(code=4401)
         return False

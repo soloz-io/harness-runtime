@@ -61,7 +61,7 @@ Quirks:
 - **HTTP server**: `api/` package (FastAPI + SSE), started via uvicorn
 - **Packages**: `core/` (business logic), `models/` (LiteLLM frame dataclasses), `api/` (HTTP layer), `migrations/` (DB schema)
 - **Two topology backends**: "start" (star topology, orchestrator+subagents) and "acrylic" (custom DAG with conditional edges)
-- **Tool loading**: `core/tool_loader.py` uses `exec()` — definitions must come from trusted sources
+- **Tool loading**: `core/tools/loader.py` uses `exec()` — definitions must come from trusted sources
 - **Monkey-patch**: `core/structured_output.py` patches `langchain_openai` to inject DeepSeek `reasoning_content`
 - **Session persistence**: LangGraph `PostgresSaver`, migrations in `migrations/`
 

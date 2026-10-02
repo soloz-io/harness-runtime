@@ -2,7 +2,7 @@
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock
-from core.checkpoint_restore import apply_checkpoint_restore
+from core.restore.checkpoint import apply_checkpoint_restore
 
 
 @pytest.mark.asyncio

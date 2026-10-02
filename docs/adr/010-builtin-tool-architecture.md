@@ -74,7 +74,7 @@ For the AI Gateway path (which dynamically builds agent definitions via `agent-b
 - `core/human_interaction.py`: `HumanInteractionMiddleware` — bundles all HITL builtin tools
 - `deepagents/middleware/filesystem.py`: `FilesystemMiddleware` — the original middleware-provided tool pattern
 - `deepagents/middleware/todo.py`: `TodoListMiddleware` — provides `write_todos` tool
-- `core/star_topology.py`, `core/node_compiler.py`, `core/subagent_builder.py`: Middleware injection points
+- `core/star_topology.py`, `core/graph/node_compiler.py`, `core/subagent_builder.py`: Middleware injection points
 - `packages/waypoint-sdk/.../builtin-tools.ts`: TypeScript builtin registry for AI Gateway path
 - ADR-005: Tool Loading and MCP Integration — the `tool_definitions` pathway
 - ADR-012: Middleware Stack Composition — middleware ordering rules

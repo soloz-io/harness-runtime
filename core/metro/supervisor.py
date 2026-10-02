@@ -4,7 +4,7 @@ Metro process supervision — ported near-verbatim from opencode's
 
 ``ensure_metro_running()`` is idempotent and safe to call repeatedly (from
 session creation and from ``after_agent`` on every turn — see
-``core.topology.composite_topology``): it only spawns Metro when nothing
+``core.graph.topology.composite_topology``): it only spawns Metro when nothing
 is running yet, discovered fresh each call rather than trusting stale
 state, since a crashed process needs to be noticed and respawned.
 

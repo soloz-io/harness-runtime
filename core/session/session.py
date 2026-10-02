@@ -13,10 +13,9 @@ from typing import Any, Optional
 
 import structlog
 
-from core.agent_backend import is_s3_mode, resolve_backend
-from core.event_publisher import EventPublisher
-from core.executor import ExecutionManager
+from core.execution.executor import ExecutionManager
 from core.metro import ensure_metro_running, ensure_watcher_running
+from core.publishers.event_publisher import EventPublisher
 from core.session.config import AgentConfig, extract_agent_config, persist_system_prompt
 from core.session.execution import (
     build_graph,
@@ -28,7 +27,8 @@ from core.session.execution import (
 from core.session.skill_paths import normalize_agent_definition
 from core.session.skills import SkillsManager
 from core.session.tools import ToolsManager
-from core.workspace_context import set_active_context
+from core.workspace.agent_backend import is_s3_mode, resolve_backend
+from core.workspace.context import set_active_context
 
 logger = structlog.get_logger(__name__)
 

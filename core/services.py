@@ -7,9 +7,9 @@ eliminating global module-level state.
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from core.event_publisher import EventPublisher
-from core.executor import ExecutionManager
-from core.tool_registry import ToolRegistry
+from core.execution.executor import ExecutionManager
+from core.publishers.event_publisher import EventPublisher
+from core.tools.registry import ToolRegistry
 
 
 @dataclass

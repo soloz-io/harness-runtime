@@ -6,7 +6,7 @@ from typing import Any, Optional
 import redis
 import structlog
 
-from core.event_publisher import EventPublisher
+from core.publishers.event_publisher import EventPublisher
 
 logger = structlog.get_logger(__name__)
 

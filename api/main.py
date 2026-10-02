@@ -16,7 +16,7 @@ from fastapi import FastAPI
 
 from api.publisher import set_redis_client
 from api.routers import health, preview, sessions, workspace_files
-from core.event_publisher import StdioPublisher
+from core.publishers.event_publisher import StdioPublisher
 from core.services import RuntimeServices, init_services
 
 logger = structlog.get_logger(__name__)

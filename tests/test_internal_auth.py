@@ -2,7 +2,7 @@ import hashlib
 
 import pytest
 
-from api.internal_auth import is_internal_caller
+from api.internal_auth import is_in_pod_caller, is_internal_caller
 
 TOKEN = "s3cret-internal-token"
 
@@ -38,3 +38,13 @@ def test_a_plaintext_token_in_the_environment_is_not_consulted(monkeypatch):
 def test_local_mode_is_open(monkeypatch):
     monkeypatch.setenv("WAYPOINT_ENV", "local")
     assert is_internal_caller(None)
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1", "::1"])
+def test_a_caller_inside_the_pod_needs_no_credential(host):
+    assert is_in_pod_caller(host)
+
+
+@pytest.mark.parametrize("host", [None, "", "10.42.0.17", "fd00::1", "127.0.0.2.evil"])
+def test_anything_off_the_pod_is_not_in_pod(host):
+    assert not is_in_pod_caller(host)
