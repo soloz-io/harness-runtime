@@ -96,6 +96,24 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
 
+      # The release version, from pyproject.toml, is a tag derived images pin
+      # (oranger's services/video-builders/sandbox/harness-version). A version
+      # names one image for good: once its tag exists it is never moved, so a
+      # build of a commit that did not bump the version publishes by sha and
+      # latest only, and says so.
+      - name: Tag the release version, once
+        id: version
+        run: |
+          VERSION=$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml)
+          test -n "$VERSION" || { echo "::error::no version in pyproject.toml"; exit 1; }
+          IMAGE=ghcr.io/soloz-io/waypoint/harness-runtime:${VERSION}
+          if docker buildx imagetools inspect "$IMAGE" >/dev/null 2>&1; then
+            echo "::notice::$IMAGE already published; it is not moved. Bump version in pyproject.toml to release this build."
+            echo "tag=" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=$IMAGE" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: docker/build-push-action@v5
         id: build
         with:
@@ -106,6 +124,7 @@ jobs:
           tags: |
             ghcr.io/soloz-io/waypoint/harness-runtime:${{ github.sha }}
             ghcr.io/soloz-io/waypoint/harness-runtime:latest
+            ${{ steps.version.outputs.tag }}
           cache-from: type=gha,scope=harness-runtime
           cache-to: type=gha,mode=max,scope=harness-runtime
 
