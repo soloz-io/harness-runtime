@@ -24,6 +24,21 @@ def get_redis_client() -> redis.Redis:
     return _redis_client
 
 
+# How long a turn's events stay replayable after it ends.
+#
+# A turn that finished needs only long enough for the client watching it to
+# read its last frames. A turn that ended on a question is different: the
+# question is replayed to every client that connects while it waits -- another
+# device, or the same browser after a reload -- and the replay is the only way
+# a question asked inside a delegated specialist reaches a client that was not
+# watching. Expiring that stream after a minute (as every turn's did) left any
+# later client with an empty stream and no dialog. It is kept until the next
+# turn replaces it, bounded by a day so an abandoned session's stream does not
+# stay in Redis for good.
+FINISHED_TURN_TTL_SECONDS = 60
+WAITING_TURN_TTL_SECONDS = 24 * 60 * 60
+
+
 def _stream_key(session_id: str) -> str:
     return f"session:{session_id}:events"
 
@@ -33,6 +48,8 @@ class SSEEventPublisher(EventPublisher):
         self.session_id = session_id
         self._stream_key = _stream_key(session_id)
         self._closed = False
+        # The turn ended on a question the user has not answered yet.
+        self._awaiting_user = False
 
         # Protocol event state
         self._seq = 0
@@ -87,7 +104,8 @@ class SSEEventPublisher(EventPublisher):
         self._closed = True
         r = get_redis_client()
         r.xadd(self._stream_key, {"data": _SENTINEL})
-        r.expire(self._stream_key, 60)
+        ttl = WAITING_TURN_TTL_SECONDS if self._awaiting_user else FINISHED_TURN_TTL_SECONDS
+        r.expire(self._stream_key, ttl)
 
     # ---- Protocol event emission ----
 
@@ -387,6 +405,8 @@ class SSEEventPublisher(EventPublisher):
         # silently stalls.
         if interrupt is not None:
             frame["interrupt"] = interrupt
+        # The last result decides: a turn that stops on a question waits for the user.
+        self._awaiting_user = subtype == "interrupted"
         self._write(frame)
 
     def publish_task_queued(self, *, session_id: str, task: dict[str, Any]) -> None:
