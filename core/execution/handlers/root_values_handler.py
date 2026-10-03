@@ -229,9 +229,9 @@ class RootValuesHandler(EventHandler):
                 content=[{"type": "text", "text": remaining}],
             )
         duration_ms = int((time.time() - start_time) * 1000)
-        publisher.publish_lifecycle_completed(session_id=session_id)
-        publisher.publish_result(
+        publisher.publish_turn_end(
             session_id=session_id,
+            outcome="completed",
             subtype="interrupted",
             duration_ms=duration_ms,
             num_turns=num_turns,

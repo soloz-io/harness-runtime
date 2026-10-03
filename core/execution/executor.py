@@ -495,9 +495,10 @@ class ExecutionManager:
         publisher.publish_message_finish()
 
         if is_error:
-            publisher.publish_lifecycle_failed(session_id=session_id, error=error_str)
-            publisher.publish_result(
+            publisher.publish_turn_end(
                 session_id=session_id,
+                outcome="failed",
+                error=error_str,
                 subtype="error_during_execution",
                 duration_ms=duration_ms,
                 is_error=True,
@@ -505,10 +506,10 @@ class ExecutionManager:
             )
             return ""
 
-        publisher.publish_lifecycle_completed(session_id=session_id)
         final_text = remaining or ""
-        publisher.publish_result(
+        publisher.publish_turn_end(
             session_id=session_id,
+            outcome="completed",
             subtype="success",
             duration_ms=duration_ms,
             num_turns=num_turns,
@@ -709,11 +710,10 @@ class ExecutionManager:
             if span:
                 span.set_attribute("cancelled", True)
                 span.end()
-            publisher.publish_lifecycle_cancelled(
-                session_id=session_id, reason="Execution cancelled by user"
-            )
-            publisher.publish_result(
+            publisher.publish_turn_end(
                 session_id=session_id,
+                outcome="cancelled",
+                error="Execution cancelled by user",
                 subtype="cancelled",
                 is_error=True,
                 result="Execution cancelled by user",

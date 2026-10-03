@@ -7,7 +7,7 @@ tool calls, model responses, interrupts, and errors during graph execution.
 import json
 import sys
 from abc import ABC, abstractmethod
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from models.frames import (
     AssistantFrame,
@@ -141,6 +141,38 @@ class EventPublisher(ABC):
 
     @abstractmethod
     def close(self) -> None: ...
+
+    def publish_turn_end(
+        self,
+        *,
+        session_id: str,
+        outcome: Literal["completed", "failed", "cancelled"],
+        error: Optional[str] = None,
+        **result: Any,
+    ) -> None:
+        """End a turn: its result frame, then the lifecycle event that closes it.
+
+        The order is the stream protocol, not a detail. A client reading the
+        stream live stops at the terminal lifecycle event (it closes the turn's
+        stream), so everything the turn has to say -- the question it stopped
+        on, its error, its files -- must be on the stream before it. A result
+        published after the lifecycle event reaches only a client that happened
+        to receive both in one read: on a question turn, that was the device
+        that sent the message, and every other device watching never showed the
+        question. Every turn ends through here, so the order holds for all.
+
+        ``result`` is passed to ``publish_result``; ``error`` is the failure or
+        cancellation reason carried by the lifecycle event.
+        """
+        self.publish_result(session_id=session_id, **result)
+        if outcome == "completed":
+            self.publish_lifecycle_completed(session_id=session_id)
+        elif outcome == "failed":
+            self.publish_lifecycle_failed(session_id=session_id, error=error or "")
+        else:
+            self.publish_lifecycle_cancelled(
+                session_id=session_id, reason=error or "Execution cancelled by user"
+            )
 
     def publish_message_finish(self) -> None:  # noqa: B027
         """Finalize the current message and reset streaming state.

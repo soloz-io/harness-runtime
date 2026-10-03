@@ -110,6 +110,7 @@ tests/test_checkpoint_restore.py
 tests/test_db_backend.py
 tests/test_hybrid_topology.py
 tests/test_internal_auth.py
+tests/test_interrupt_frame_order.py
 tests/test_pack_fetch.py
 tests/test_publisher_ttl.py
 tests/test_question_report.py
