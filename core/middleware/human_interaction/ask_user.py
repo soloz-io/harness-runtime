@@ -15,7 +15,31 @@ from typing import Any, Literal
 
 from langchain_core.tools import tool
 from langgraph.types import interrupt
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
+
+
+class AskUserMedia(BaseModel):
+    """A preview of what an option stands for."""
+
+    kind: Literal["image", "audio", "video"]
+    url: str
+
+    aspect: Literal["square", "portrait", "landscape", "vertical"] = "square"
+    """Preview shape: square 1:1, portrait 3:4, landscape 16:9, vertical 9:16."""
+
+    poster: str | None = None
+    """A still frame shown for a video until it is played."""
+
+
+class AskUserOption(BaseModel):
+    """A response choice shown as a card."""
+
+    label: str
+    """What the card is called — also the answer returned when it is chosen."""
+
+    badge: str | None = None
+    description: str | None = None
+    media: AskUserMedia | None = None
 
 
 class AskUserQuestion(BaseModel):
@@ -24,14 +48,50 @@ class AskUserQuestion(BaseModel):
     question: str
     """The question text."""
 
-    options: list[str] | None = None
+    options: list[str | AskUserOption] | None = None
     """Optional list of predefined response choices."""
+
+    layout: Literal["list", "carousel"] = "list"
+    """How the options are shown: rows, or a row of preview cards."""
 
     blocking: bool | None = None
     """Whether this question blocks the workflow from continuing."""
 
+    @model_validator(mode="after")
+    def _carousel_options_have_media(self) -> "AskUserQuestion":
+        if self.layout != "carousel":
+            return self
+        if not self.options:
+            raise ValueError("a carousel question needs options")
+        bare = [
+            str(i)
+            for i, o in enumerate(self.options)
+            if not isinstance(o, AskUserOption) or o.media is None
+        ]
+        if bare:
+            raise ValueError(f"carousel options need media; options without it: {', '.join(bare)}")
+        return self
 
-@tool("ask_user")
+
+class AskUserInput(BaseModel):
+    """The ask_user call. Validated before the tool runs, so a refusal reaches the agent as an error to correct."""
+
+    questions: list[AskUserQuestion]
+    type: Literal["approval", "clarification"] = "clarification"
+    file_path: str | None = None
+
+    @model_validator(mode="after")
+    def _carousel_is_not_an_approval(self) -> "AskUserInput":
+        # An approval dialog answers only "Approved": which card was chosen would be lost.
+        if self.type == "approval" and any(q.layout == "carousel" for q in self.questions):
+            raise ValueError(
+                'a carousel question cannot be asked with type="approval": the answer would be '
+                '"Approved" without the chosen option. Ask it again without type.'
+            )
+        return self
+
+
+@tool("ask_user", args_schema=AskUserInput)
 def ask_user(
     questions: list[AskUserQuestion],
     type: Literal["approval", "clarification"] = "clarification",
@@ -43,8 +103,17 @@ def ask_user(
 
     Each question object has:
       - question (str): the question text
-      - options (list[str], optional): predefined response choices
+      - options (list, optional): predefined response choices. Each is a plain
+        string, or an object {label, badge?, description?, media?} where media is
+        {kind: "image"|"audio"|"video", url, aspect?: "square"|"portrait"|
+        "landscape"|"vertical", poster?: still-frame url for a video}
+      - layout ("list" | "carousel", default "list"): "carousel" shows the
+        options as a row of preview cards the user can see or play before
+        choosing; every option must then be an object with media, and `type`
+        must not be "approval"
       - blocking (bool, optional): whether this blocks the workflow
+
+    The answer for a chosen option is its label.
 
     Args:
         questions: Array of question objects to present to the user.

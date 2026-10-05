@@ -1,6 +1,6 @@
 [project]
 name = "harness-runtime"
-version = "0.1.17"
+version = "0.1.18"
 description = "LangGraph Agent Execution Engine — HTTP server mode"
 authors = [
     {name = "Bizmatters Team"}

@@ -105,6 +105,7 @@ harness_runtime.egg-info/top_level.txt
 models/__init__.py
 models/frames.py
 tests/test_artifact_reader.py
+tests/test_ask_user_options.py
 tests/test_attachment_content.py
 tests/test_checkpoint_restore.py
 tests/test_db_backend.py
