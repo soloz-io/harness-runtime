@@ -1,29 +1,30 @@
 """
-Human Interaction Middleware — provides the user-facing tools to agents.
+Human Interaction Middleware — provides `ask_user`, the tool that asks a person.
 
-Groups them under a single middleware so agents need one entry in the stack.
-Wire this into all topology builders (star, acrylic, subagent).
+Only the agent the user talks to gets it: the orchestrator of a composite or
+star topology, or a standalone graph node. A specialist reaches the user only
+through its Decision Report (the orchestrator relays its questions); given
+`ask_user`, its question would be answered to the orchestrator, which never saw
+it, and the specialist's own context — the options it offered — would be lost.
 
-`ask_user` is intercepted by `HumanInTheLoopMiddleware` via `interrupt_on`, so
-its body never runs — a question has no answer until the graph stops and someone
-gives one.
+`ask_user` pauses the graph at a native LangGraph interrupt (see ask_user.py);
+only Command(resume=...) continues it. System notices never enter the graph --
+the harness writes them to the chat (api/routers/sessions.py) -- so one can
+neither answer nor cancel the open question.
 
-`task_queue` is non-blocking and runs its body directly — it records a pending
-job payload that ``RootValuesHandler`` drains and emits as a ``task_queued``
-result frame.  No interrupt or human decision is required.
+A background job needs no tool: its workflow's own notices tell the chat it
+started and finished.
 """
 
 from langchain.agents.middleware import AgentMiddleware
 
 from core.middleware.human_interaction.ask_user import ask_user
-from core.middleware.human_interaction.task_queue import task_queue
 
 
 class HumanInteractionMiddleware(AgentMiddleware):
-    """Provides the human-interaction tools to agents.
+    """Provides `ask_user` to the agent the user talks to.
 
-    `ask_user`'s behaviour comes from `HumanInTheLoopMiddleware` via
-    `interrupt_on`.  `task_queue` is non-blocking and executes immediately.
+    Its behaviour comes from `HumanInTheLoopMiddleware` via `interrupt_on`.
     """
 
-    tools = [ask_user, task_queue]
+    tools = [ask_user]

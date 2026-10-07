@@ -5,7 +5,6 @@ SRP: Handles coordinator-level values events:
 - Structured response / file extraction
 - DB projection of messages + files
 - Values channel publishing
-- task_queue side-channel emission
 """
 
 import time
@@ -17,7 +16,7 @@ from core.execution.handlers import EventHandler
 from core.execution.helpers import extract_interrupt_payload, serialize_messages_for_values
 from core.execution.state import ExecutionState
 from core.execution.types import Event
-from core.middleware.human_interaction.task_queue import UNSCOPED_KEY, consume_task_queue_payloads
+from core.middleware.background_jobs import is_job_outcome
 from core.persistence.message_writer import write_agent_output_files, write_chat_messages
 from core.publishers.event_publisher import EventPublisher
 from core.waypoint_reports import has_unanswered_question, note_new_messages
@@ -126,7 +125,9 @@ class RootValuesHandler(EventHandler):
         prev_count = state.values_messages_count
         if len(msgs) > prev_count:
             state.values_messages_count = len(msgs)
-            serialized = serialize_messages_for_values(msgs)
+            # A reported job outcome is the agent's to read, not the chat's to
+            # show: the chat already shows the job's own notice row (ADR-015).
+            serialized = [m for m in serialize_messages_for_values(msgs) if not is_job_outcome(m)]
             if serialized:
                 for msg in serialized:
                     if (
@@ -172,34 +173,6 @@ class RootValuesHandler(EventHandler):
                 # A tool of the main agent that can write finished: the
                 # workspace may have changed (core/waypoint_reports/workspace.py).
                 note_new_messages(session_id, serialized[prev_count:])
-
-        # ---- task_queue side-channel ----
-        #
-        # If the orchestrator called task_queue() in this superstep, the tool
-        # body deposited a payload under this session's key (the graph's
-        # configurable.thread_id IS the session id). Consume it here — after
-        # values are published so the tool-call message is already visible in
-        # the UI — and emit one lightweight task_queued result frame per job.
-        # This does NOT stop the stream: execution continues, and the client
-        # monitors each run_id by polling the run status endpoint.
-        payloads = consume_task_queue_payloads(session_id)
-        if not payloads:
-            # Recorded outside a graph run (no thread_id in config): the tool
-            # fell back to the unscoped key. Drained here so direct
-            # invocations still surface.
-            payloads = consume_task_queue_payloads(UNSCOPED_KEY)
-        if payloads:
-            state.pending_task_queue.extend(payloads)
-
-        for task in state.pending_task_queue:
-            publisher.publish_task_queued(session_id=session_id, task=task)
-            logger.info(
-                "task_queued_emitted",
-                session_id=session_id,
-                job_name=task.get("job_name"),
-                run_id=task.get("run_id"),
-            )
-        state.pending_task_queue.clear()
 
         if interrupt_val is not None:
             self._publish_interrupt(

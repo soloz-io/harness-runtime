@@ -13,6 +13,7 @@ from langchain_quickjs import CodeInterpreterMiddleware
 
 from core.graph.interfaces import TopologyBuilder
 from core.graph.topology.subagent_builder import build_subagent
+from core.middleware.background_jobs import JobReportingMiddleware, JobTrackingMiddleware
 from core.middleware.custom_tool_middleware import CustomToolMiddleware
 from core.middleware.human_interaction import HumanInteractionMiddleware
 from core.middleware.rubric_middleware import build_rubric_middlewares
@@ -192,6 +193,10 @@ class StarTopologyBuilder(TopologyBuilder):
         middleware_stack.append(CodeInterpreterMiddleware(timeout=300))
         logger.info("code_interpreter_middleware_appended")
         middleware_stack.append(HumanInteractionMiddleware())
+        # The main agent's own jobs and its subagents', reported before each
+        # model call (ADR-015).
+        middleware_stack.append(JobTrackingMiddleware())
+        middleware_stack.append(JobReportingMiddleware())
 
         # Add CustomToolMiddleware for orchestrator if it has a tools folder
         orchestrator_node_id = orchestrator_config.get("id", "")

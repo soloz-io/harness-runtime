@@ -14,8 +14,8 @@ import structlog
 from langchain_core.runnables import Runnable
 from langchain_quickjs import CodeInterpreterMiddleware
 
+from core.middleware.background_jobs import JobTrackingMiddleware
 from core.middleware.custom_tool_middleware import CustomToolMiddleware
-from core.middleware.human_interaction import HumanInteractionMiddleware
 from core.middleware.rubric_middleware import build_rubric_middlewares
 from core.middleware.shell_middleware import ShellMiddleware
 from core.middleware.structured_output import build_tool_strategy, resolve_structured_output_model
@@ -81,8 +81,9 @@ def build_middleware_stack(
     tools_spec: Any = None,
     extra_tool_dirs: list[Path] | None = None,
 ) -> list[Any]:
-    """Replicate the orchestrator middleware stack (rubric → code interp →
-    HITL → shell → url fetch → custom tools).
+    """A specialist's middleware stack (rubric → code interp → shell →
+    url fetch → custom tools). Unlike the orchestrator's, it has no
+    human interaction: only the orchestrator asks the user.
 
     ShellMiddleware exposes load_skill, which stays unconditional — same
     rationale as subagent_builder.py's star-topology stack: every specialist
@@ -101,9 +102,14 @@ def build_middleware_stack(
     middleware_stack = build_rubric_middlewares(rubric_config, model)
     middleware_stack.append(CodeInterpreterMiddleware(timeout=300))
     logger.info("code_interpreter_middleware_appended")
-    middleware_stack.append(HumanInteractionMiddleware())
+    # No HumanInteractionMiddleware: a specialist never asks the user directly.
+    # Its questions go in its Decision Report and the orchestrator asks them;
+    # an ask_user here is answered to the orchestrator, which never saw it.
     middleware_stack.append(ShellMiddleware())
     middleware_stack.append(UrlFetchMiddleware())
+    # The jobs this specialist starts: their run ids return to the orchestrator
+    # with its state, and the orchestrator is told when they finish (ADR-015).
+    middleware_stack.append(JobTrackingMiddleware())
     tool_dirs: list[Path] = list(tools_spec.search_dirs) if tools_spec else []
     tool_dirs.extend(extra_tool_dirs or [])
     if tool_dirs:

@@ -13,7 +13,7 @@ Three distinct HITL patterns exist:
 2. **Phase review** (e.g., `review_content`): Human reviews a completed deliverable and either approves, rejects with feedback, or edits the content directly.
 3. **Approval gate** (legacy `script_reviewer` pattern): Human approves, edits, or rejects a tool call before execution. Rejection returns feedback to the agent.
 
-A fourth tool registered alongside these — `task_queue` — is deliberately **not** a HITL pattern: it never pauses the graph and requires no human decision. It is documented here because it shares the `HumanInteractionMiddleware` registration and the `ResultFrame` side-channel vocabulary.
+A background job is deliberately **not** a HITL pattern: it never pauses the graph, requires no human decision, and involves no tool. It is documented here because it, too, reaches the chat outside the agent's turns.
 
 These differ in semantics and `allowed_decisions`. Without a documented protocol, it's unclear which pattern applies when, and how the runtime should handle each.
 
@@ -29,6 +29,33 @@ These differ in semantics and `allowed_decisions`. Without a documented protocol
 - On resume, LangGraph returns the `decisions` payload as the return value of `interrupt()`, which `ask_user` unpacks to extract the human's text as the `ToolMessage` content.
 
 **Previous design (deprecated):** The tool body was a no-op and `HumanInTheLoopMiddleware` intercepted the call via `interrupt_on` config. This was fragile — forgetting `interrupt_on` caused the graph to run through `ask_user` without pausing, and sandbox restarts could leave the graph at `END` with no active interrupt, making `Command(resume=...)` a silent no-op.
+
+### System notices are outside the graph (2026-10-07)
+
+> **Superseded by ADR-015 (Job Outcomes Reach the Agent Through Its Own Pending
+> Jobs).** The agent reads the outcomes of the jobs it started before each model
+> call; the chat does not deliver notices. The rule that a notice is never a
+> resume value stands.
+
+The harness does three things with a graph: run it, observe its result
+(an interrupt included), and resume it with `Command(resume=...)` on the user's
+answer. A system notice -- a job finished or failed, a video started -- is none
+of those, so it never becomes a graph turn:
+
+- The harness writes the notice to the chat (its history row and a live values
+  frame) and does nothing else. It does not inspect checkpoints for it.
+- The chat delivers it to the agent: when no question is open and no turn is
+  running, it sends the notice as an ordinary message,
+  `[System Notification] <message>` and its fields. That message is a normal run,
+  never a resume, and is only sent when nothing is paused.
+- The stored `[System Notification]` user row of that run is the record that the
+  notice was delivered; the chat never sends a notice that has one.
+
+Before this, the harness ran each notice as a turn and decided whether a question
+was open by reading the checkpoint, which could lag the interrupt by ~100 ms: a
+notice queued behind the asking turn resumed the graph with its text as the
+user's answer. Keeping notices out of the graph removes the race instead of
+guarding it.
 
 ### `review_content` and approval-gate tools — `interrupt_on` + `HumanInTheLoopMiddleware`
 
@@ -61,7 +88,7 @@ For `ask_user`, the resume value from `interrupt()` is the decisions payload; th
 
 ### Builtin HITL tool contracts
 
-Two builtin HITL tools are registered via `HumanInteractionMiddleware` (see ADR-010). The same middleware also carries `task_queue`, a **non-HITL** tool — it registers jobs without pausing the graph (see [`task_queue` — non-blocking job registration](#task_queue--non-blocking-job-registration-not-a-hitl-pattern)):
+Two builtin HITL tools are registered via `HumanInteractionMiddleware` (see ADR-010). A background job is shown without any tool (see [Background jobs — reported by their own notices](#background-jobs--reported-by-their-own-notices-not-a-hitl-pattern)):
 
 ```python
 @tool("ask_user")
@@ -118,48 +145,27 @@ LLM calls review_content(phase_name="Script Review", content="...")
   → Agent resumes
 ```
 
-### `task_queue` — non-blocking job registration (not a HITL pattern)
+### Background jobs — reported by their own notices (not a HITL pattern)
 
-`task_queue` reports a background job the orchestrator has just submitted (a
-specialist's `tts_cli` / `video_cli` call returned `{status: "QUEUED",
-run_id}`) so the playground can show a live "N tasks running" panel. It is
-symmetric with `ask_user` in *registration* but opposite in *behavior*:
+The playground shows a live "N tasks running" panel for background jobs. No
+agent and no harness code registers them. Every job workflow reports itself
+through system notices it sends into the session, and the `send-message` step
+stamps each structured system notice with the run that sent it (`run_id`):
 
 ```
-LLM calls task_queue(job_name="Generating voice-over track", run_id="wpt_run_abc")
-  → tool body records {job_name, run_id, description} under the session's
-    pending list (keyed by configurable.thread_id — the session id)
-  → tool returns an acknowledgment string IMMEDIATELY — no interrupt() call
-  → graph continues to the next superstep
-  → RootValuesHandler drains this session's list after the values event
-      and emits one ResultFrame per job:
-        { type: "result", subtype: "task_queued", session_id,
-          duration_ms: 0, is_error: false, num_turns: 1,
-          interrupt: { task: { job_name, run_id, description } } }
-  → client adds the job to the task panel and polls
-      GET /api/v1/workflows/runs/{run_id}/status until terminal
+job workflow starts      → { type: "job/started", title: <job name>, message, run_id }
+job workflow completes   → { type: <media type>, url, mediaType, message, run_id }
+job workflow fails       → { type: "job/failed", error, title, run_id }
 ```
 
-Design points:
-
-- **Not in `interrupt_on`.** `HumanInTheLoopMiddleware` intercepts tool calls
-  *before* they execute; `task_queue` must run its body to record the payload,
-  so it is registered only in `HumanInteractionMiddleware.tools`.
-- **The `interrupt` field is reused as the side-channel** — it is already
-  `Optional[dict]` on `ResultFrame` and flows to the client unchanged.
-  `subtype="task_queued"` distinguishes it from `"interrupted"`; clients must
-  not treat it as a turn end (no `messages/message-finish` precedes it, and the
-  turn keeps streaming).
-- **No mid-turn state on the wire in either publisher**: `StdioPublisher` and
-  `SSEEventPublisher` both implement `publish_task_queued`, and the SSE variant
-  deliberately emits no `message-finish` protocol event, unlike `publish_result`.
-- **Session-keyed store, list-valued.** The HTTP server is multi-session by
-  design (`/session/{session_id}/message` + per-session `SessionState`), so a
-  process-global slot would let one session's job surface on another's stream;
-  list-valued entries allow several jobs queued in one superstep.
-- **Completion is client-driven by polling**, not by the orchestrator
-  re-calling `task_queue`, and not by matching the `[System Notification]`
-  chat message (whose payload carries no `run_id`).
+- **The chat's task list is these notices.** A started notice adds the job; the
+  completed or failed notice with the same `run_id` removes it. No runs list is
+  read, so nothing races the run's own status write.
+- **A started notice never wakes the agent.** The harness writes it for the chat
+  and returns (`_may_finish_a_job` in `api/routers/sessions.py`): the agent already
+  knows the job started — the tool that queued it said so. Completed and failed
+  notices write the chat row and wake an idle agent; the agent reads the
+  outcome from the job's own run (ADR-015).
 
 ### `blocking` field semantics
 

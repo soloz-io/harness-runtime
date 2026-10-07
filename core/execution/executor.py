@@ -47,6 +47,10 @@ class ExecutionError(Exception):
     pass
 
 
+# LangGraph's channel for a pending interrupt (private in langgraph >= 1.0).
+_INTERRUPT_CHANNEL = "__interrupt__"
+
+
 class ExecutionManager:
     """Executes a compiled LangGraph agent and streams v3 events.
 
@@ -204,6 +208,70 @@ class ExecutionManager:
             return ""
         return ""
 
+    async def has_pending_question(self, session_id: str) -> bool:
+        """Whether the session's graph is paused on a question the user has not answered.
+
+        True when the latest checkpoint has a pending interrupt (an ``ask_user``
+        waiting for its answer). A check that cannot be made answers False: the
+        caller then proceeds as it would without a question.
+        """
+        checkpointer = self._async_checkpointer or self.checkpointer
+        if checkpointer is None:
+            return False
+        try:
+            config: RunnableConfig = {"configurable": {"thread_id": session_id}}
+            if hasattr(checkpointer, "aget_tuple"):
+                cpt = await checkpointer.aget_tuple(config)
+            else:
+                cpt = checkpointer.get_tuple(config)
+        except Exception as e:
+            logger.warning("pending_interrupt_check_failed", session_id=session_id, error=str(e))
+            return False
+        if cpt is None:
+            return False
+
+        # A paused graph's latest checkpoint holds the interrupt as a pending
+        # write on the interrupt channel: (task_id, "__interrupt__", value). A
+        # CheckpointTuple carries no `next` in its metadata and no `interrupts`
+        # attribute -- those are StateSnapshot's -- so reading either always
+        # answered "nothing pending", and a notice cancelled the open question.
+        writes = getattr(cpt, "pending_writes", None) or []
+        return any(len(w) >= 2 and w[1] == _INTERRUPT_CHANNEL for w in writes)
+
+    async def has_unreported_jobs(self, session_id: str) -> bool:
+        """Whether an idle session has finished jobs its agent has not been told
+        about, so a wake-up run would report them (ADR-015).
+
+        False while the graph is paused on a question -- the answer's resume
+        reports them -- and False whenever the check cannot be made: a wake-up
+        on a paused graph would abandon the user's question, so doubt means no
+        wake-up. The job stays pending and is reported at the next model call.
+        """
+        checkpointer = self._async_checkpointer or self.checkpointer
+        if checkpointer is None or self._pool is None:
+            return False
+        try:
+            config: RunnableConfig = {"configurable": {"thread_id": session_id}}
+            if hasattr(checkpointer, "aget_tuple"):
+                cpt = await checkpointer.aget_tuple(config)
+            else:
+                cpt = checkpointer.get_tuple(config)
+            if cpt is None:
+                return False
+            writes = getattr(cpt, "pending_writes", None) or []
+            if any(len(w) >= 2 and w[1] == _INTERRUPT_CHANNEL for w in writes):
+                return False
+            pending = list((cpt.checkpoint.get("channel_values") or {}).get("pending_jobs") or [])
+            if not pending:
+                return False
+            from core.middleware.background_jobs import finished_jobs
+
+            finished = await asyncio.to_thread(finished_jobs, self._pool, pending)
+        except Exception as e:
+            logger.warning("unreported_jobs_check_failed", session_id=session_id, error=str(e))
+            return False
+        return bool(finished)
+
     async def _resume_from_pending_interrupt(
         self,
         input_payload: dict[str, Any],
@@ -220,38 +288,10 @@ class ExecutionManager:
         carry intent that a free-text message does not express, and guessing at
         one would act on the user's behalf.
         """
-        checkpointer = self._async_checkpointer or self.checkpointer
-        if checkpointer is None:
-            return None
-
         text = self._latest_user_text(input_payload)
         if not text:
             return None
-
-        try:
-            config: RunnableConfig = {"configurable": {"thread_id": session_id}}
-            if hasattr(checkpointer, "aget_tuple"):
-                cpt = await checkpointer.aget_tuple(config)
-            else:
-                cpt = checkpointer.get_tuple(config)
-        except Exception as e:
-            logger.warning("pending_interrupt_check_failed", session_id=session_id, error=str(e))
-            return None
-
-        if cpt is None:
-            return None
-
-        # A graph with no pending tasks reached END — nothing to resume.
-        next_tasks = (getattr(cpt, "metadata", None) or {}).get("next", [])
-        if not next_tasks:
-            return None
-
-        interrupts = getattr(cpt, "interrupts", None)
-        if not interrupts:
-            # Older checkpoint tuples expose pending interrupts on the tasks.
-            tasks = getattr(cpt, "pending_writes", None) or []
-            interrupts = [t for t in tasks if getattr(t, "value", None) is not None]
-        if not interrupts:
+        if not await self.has_pending_question(session_id):
             return None
 
         logger.info(
@@ -310,12 +350,13 @@ class ExecutionManager:
                 else:
                     cpt = checkpointer.get_tuple(config)
                 if cpt is not None:
-                    # If the graph has no pending tasks it reached END — there is no
-                    # active interrupt to resume.  Feed the decision as a new human
-                    # turn instead of calling Command(resume=...) which would be a
-                    # silent no-op on a finished graph.
-                    next_tasks = (getattr(cpt, "metadata", None) or {}).get("next", [])
-                    if not next_tasks:
+                    # With no pending interrupt there is nothing to resume: feed
+                    # the decision as a new human turn instead of calling
+                    # Command(resume=...), a silent no-op on a finished graph.
+                    # (This read metadata["next"], which a CheckpointTuple does
+                    # not carry, so every resume fell back to a human turn and
+                    # the question was abandoned.)
+                    if not await self.has_pending_question(session_id):
                         logger.info(
                             "resume_graph_at_end_fallback_to_human_turn",
                             session_id=session_id,
@@ -604,6 +645,7 @@ class ExecutionManager:
         resume_payload: Optional[Any] = None,
         workspace_id: Optional[str] = None,
         app_id: Optional[str] = None,
+        run_reason: Optional[str] = None,
     ) -> str:
         tracer = self._tracer
         span = None
@@ -628,13 +670,24 @@ class ExecutionManager:
             config["configurable"]["app_id"] = app_id
         if self._async_checkpointer:
             config["configurable"]["checkpointer"] = self._async_checkpointer
+        # Why this run started, for traces and evals: "external_event" is a
+        # wake-up with no human message (ADR-015); absent, a user's turn.
+        if run_reason:
+            config["metadata"] = {"run_reason": run_reason}
+            logger.info("graph_run_reason", session_id=session_id, run_reason=run_reason)
 
         try:
             self._handle_initial_setup(publisher, session_id, model_name, agent_definition)
 
             stream_input = await self._build_resume_input(input_payload, resume_payload, session_id)
 
-            run = await graph.astream_events(stream_input, config, version="v3")
+            # durability="sync": every step's checkpoint -- an interrupt
+            # included -- is written before the run moves on, so when the turn
+            # ends its pause is already saved. With the default ("async") the
+            # interrupt could land after the turn reported done, and the next
+            # turn on this session (a notice) saw no question open, ran, and
+            # cancelled it.
+            run = await graph.astream_events(stream_input, config, version="v3", durability="sync")
             async for raw_event in run:
                 if not isinstance(raw_event, dict):
                     # Kept at INFO: a non-dict event is unexpected and rare,

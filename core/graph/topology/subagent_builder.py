@@ -23,6 +23,7 @@ from langchain_core.tools import BaseTool
 
 from core.graph.state_schema import create_state_schema_from_config
 from core.llm.factory import ModelFactory
+from core.middleware.background_jobs import JobTrackingMiddleware
 from core.middleware.custom_tool_middleware import CustomToolMiddleware
 from core.middleware.rubric_middleware import build_rubric_middlewares
 from core.middleware.shell_middleware import ShellMiddleware
@@ -204,6 +205,8 @@ def _build_subagent_spec(
         middleware_stack.extend(rubric_middlewares)
 
     middleware_stack.append(ShellMiddleware())
+    # The jobs this subagent starts return to its parent with its state (ADR-015).
+    middleware_stack.append(JobTrackingMiddleware())
 
     # Add CustomToolMiddleware if the node has a tools folder
     if tools_spec:

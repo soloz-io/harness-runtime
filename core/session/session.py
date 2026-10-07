@@ -126,6 +126,7 @@ class Session:
         publisher: Optional[EventPublisher] = None,
         role: str = "user",
         attachments: Optional[list[dict[str, Any]]] = None,
+        run_reason: Optional[str] = None,
     ) -> str:
         self._ensure_initialized()
         self.turns += 1
@@ -146,6 +147,7 @@ class Session:
             resume_payload=resume,
             workspace_id=self.workspace_id,
             app_id=self.app_id,
+            run_reason=run_reason,
         )
 
         # No checkpoint call here, deliberately.

@@ -34,6 +34,7 @@ from core.graph.topology._shared import (
 )
 from core.graph.topology.subagent_builder import build_subagent
 from core.metro import ensure_metro_running, ensure_watcher_running
+from core.middleware.background_jobs import JobReportingMiddleware
 from core.middleware.human_interaction import HumanInteractionMiddleware
 from core.middleware.structured_output import (
     build_tool_strategy,
@@ -215,6 +216,9 @@ class CompositeTopologyBuilder(TopologyBuilder):
         middleware_stack: list[Any] = [
             TodoListMiddleware(),
             HumanInteractionMiddleware(),
+            # Before each model call: the outcomes of the jobs the specialists
+            # started, whose run ids came back with their state (ADR-015).
+            JobReportingMiddleware(),
             CodeInterpreterMiddleware(timeout=300),
         ]
 

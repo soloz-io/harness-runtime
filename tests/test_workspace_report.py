@@ -34,9 +34,7 @@ def test_every_writing_tool_reports(sent, tool):
     assert len(sent) == 1
 
 
-@pytest.mark.parametrize(
-    "tool", ["read_file", "ls", "grep", "task", "ask_user", "task_queue", "unknown"]
-)
+@pytest.mark.parametrize("tool", ["read_file", "ls", "grep", "task", "ask_user", "unknown"])
 def test_a_tool_that_cannot_write_reports_nothing(sent, tool):
     ws.note_tool_finished("chat_a", tool)
     ws.flush_workspace_change("chat_a")

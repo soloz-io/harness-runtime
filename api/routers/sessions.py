@@ -1,7 +1,6 @@
 """Session management endpoints — uses ``RuntimeServices`` singleton for DI."""
 
 import asyncio
-import json as _json
 import os
 import time
 import traceback
@@ -21,58 +20,40 @@ from core.session.skills import SkillsError
 
 logger = structlog.get_logger(__name__)
 
-_SYSTEM_NOTICE_PREFIX = "[System Notification]"
+
+def _write_notice_row(session_id: str, notice: str) -> None:
+    """Write a notice for the chat: its history row and, to a chat watching
+    live, a values frame."""
+    from core.persistence.message_writer import write_chat_messages
+
+    system_msg = {"type": "system", "content": notice}
+    pool = getattr(_get_execution_manager(), "_pool", None)
+    if pool is not None:
+        write_chat_messages(pool, session_id, [system_msg], offset=0, source="notification")
+        logger.info(
+            "system_message_written",
+            session_id=session_id,
+            source="notification",
+            content_preview=notice[:120],
+        )
+    else:
+        logger.warning("system_message_no_pool", session_id=session_id)
+    if session_id in _get_session_store():
+        SSEEventPublisher(session_id).publish_values(
+            session_id=session_id, messages=[system_msg], files=None
+        )
 
 
-def _notification_text(raw: str) -> str:
-    """Render a JSON notification payload as the text the agent will read.
+def _may_finish_a_job(notice: str) -> bool:
+    """Whether a notice can mean a job finished. A started notice cannot: the
+    tool that started the job already told the agent (ADR-015)."""
+    import json
 
-    This string is the ONLY part of a notification an agent ever sees. The full
-    payload is written to chat_messages for the UI, but the turn is fed just
-    this text — so anything omitted here is not "less prominent", it is gone.
-
-    Therefore: nothing is dropped. ``message``/``title`` lead because a
-    notification is prose first, and every remaining field follows as
-    ``key: value``. The harness does not decide which fields matter, because it
-    cannot: the payload is authored by whatever workflow sent it, and its
-    vocabulary belongs to that app.
-
-    This function used to return ``message`` alone, which silently discarded
-    every other field. An app whose notification carried the address of what a
-    job produced saw that address deleted in transit, and its agent — told to
-    use a field that no longer existed — correctly refused to invent one and
-    reported the pipeline blocked while the asset sat in storage. Naming the
-    dropped field here and reading it explicitly would have fixed that one app
-    and left the next field, and the next app, to rediscover the same bug. The
-    contract is losslessness, not a list of known keys.
-
-    Non-dict and unparseable payloads pass through untouched: a notification
-    that is already a plain string is already its own text.
-    """
     try:
-        payload = _json.loads(raw)
-    except (TypeError, ValueError, _json.JSONDecodeError):
-        return raw
-    if not isinstance(payload, dict) or not payload:
-        return raw
-
-    lead_key = "message" if payload.get("message") else ("title" if payload.get("title") else None)
-    lead = str(payload[lead_key]) if lead_key else ""
-
-    lines: list[str] = []
-    for key, value in payload.items():
-        if key == lead_key or value is None or value == "":
-            continue
-        rendered = value if isinstance(value, str) else _json.dumps(value)
-        rendered = rendered.strip()
-        if not rendered or rendered in lead:
-            # Already said in the prose; repeating it adds nothing to read.
-            continue
-        lines.append(f"{key}: {rendered}")
-
-    if not lead and not lines:
-        return raw
-    return "\n".join(([lead] if lead else []) + lines)
+        parsed = json.loads(notice)
+    except (TypeError, ValueError):
+        return True
+    return not (isinstance(parsed, dict) and parsed.get("type") == "job/started")
 
 
 router = APIRouter(tags=["sessions"])
@@ -289,6 +270,78 @@ async def _run_turn_async(
         if is_current:
             state.task = None
         publisher.close()
+        # A job that finished after this turn's last model call is reported by
+        # a wake-up run (ADR-015). Only by the last queued turn: a turn queued
+        # behind this one reports it itself, and checks again when it ends.
+        if is_current:
+            _schedule_wake(state)
+
+
+def _schedule_wake(state: SessionState) -> None:
+    """Check, without waiting, whether the session's agent should be woken to be
+    told about finished jobs, and wake it if so."""
+    if state.task is not None and not state.task.done():
+        return
+    state.task = asyncio.create_task(_wake_async(state))
+
+
+async def _wake_async(state: SessionState) -> None:
+    """A wake-up run: an internal invocation with no messages (ADR-015).
+
+    Decided under the turn lock, so no turn can start between the check and the
+    run. The check is the executor's: no run in progress, no question open, and
+    a pending job finished. The run's first model call is preceded by the
+    job-reporting middleware, which tells the agent.
+    """
+    session = state.session
+    session_id = session.session_id
+    my_task = asyncio.current_task()
+    ran_cleanly = False
+    publisher: Optional[SSEEventPublisher] = None
+    try:
+        async with state.turn_lock:
+            if not await _get_execution_manager().has_unreported_jobs(session_id):
+                logger.info("wake_skipped_nothing_to_report", session_id=session_id)
+                return
+            _trim_sentinel(session_id)
+            publisher = SSEEventPublisher(session_id)
+            state.publisher = publisher
+            logger.info("wake_run_started", session_id=session_id, run_reason="external_event")
+            await session.async_run_turn(
+                user_content="", publisher=publisher, run_reason="external_event"
+            )
+            ran_cleanly = True
+            logger.info("wake_run_completed", session_id=session_id)
+    except asyncio.CancelledError:
+        logger.info("wake_run_cancelled", session_id=session_id)
+        if publisher is not None:
+            publisher.publish_result(
+                session_id=session_id,
+                subtype="cancelled",
+                is_error=True,
+                result="Turn cancelled by user",
+            )
+        raise
+    except Exception as e:
+        logger.error("wake_run_failed", error=str(e), traceback=traceback.format_exc())
+        if publisher is not None:
+            publisher.publish_result(
+                session_id=session_id,
+                subtype="error_during_execution",
+                is_error=True,
+                result=str(e),
+            )
+    finally:
+        is_current = state.task is my_task
+        if is_current:
+            state.task = None
+        if publisher is not None:
+            publisher.close()
+        # A job that finished during this run is reported by the next one. Not
+        # after a failed run: it would fail the same way again, and the job
+        # stays pending for the next model call whatever starts it.
+        if is_current and ran_cleanly:
+            _schedule_wake(state)
 
 
 @router.get("/checkpoints")
@@ -414,50 +467,15 @@ async def handle_message(session_id: str, body: dict[str, Any]) -> dict[str, Any
     # also removes the failure this endpoint had — restoring files underneath a
     # running agent whose file descriptors were already open.
 
-    # System messages: write the notification row (for the audio-player UI),
-    # then fall through to a user-role graph turn so the agent is informed.
-    if role == "system" and message:
-        from core.persistence.message_writer import write_chat_messages
-
-        system_msg = {"type": "system", "content": message}
-        pool = getattr(_get_execution_manager(), "_pool", None)
-        if pool is not None:
-            write_chat_messages(pool, session_id, [system_msg], offset=0, source="notification")
-            logger.info(
-                "system_message_written",
-                session_id=session_id,
-                source="notification",
-                content_preview=str(message)[:120],
-            )
-        else:
-            logger.warning("system_message_no_pool", session_id=session_id)
-
-        session_store = _get_session_store()
-        if session_id in session_store:
-            fresh_publisher = SSEEventPublisher(session_id)
-            fresh_publisher.publish_values(
-                session_id=session_id,
-                messages=[{"type": "system", "content": message}],
-                files=None,
-            )
-
-        # Feed the agent a user-role message so it knows the job completed.
-        # Fall through to initialize session state if needed and execute turn.
-        notice_text = _notification_text(message)
-        if notice_text:
-            message = f"{_SYSTEM_NOTICE_PREFIX} {notice_text}"
-            role = "user"
-            logger.info(
-                "notification_fallthrough_turn",
-                session_id=session_id,
-                notice_text=notice_text[:200],
-                already_in_flight=(
-                    session_id in session_store
-                    and session_store[session_id].task is not None
-                    and not session_store[session_id].task.done()
-                ),
-            )
-        else:
+    # A system notice is the chat's, not the graph's (ADR-015). It is written
+    # to the chat and never becomes a turn: a turn on a paused graph would
+    # answer or cancel the user's open question. A job's outcome reaches the
+    # agent from the job's own run, which the agent's pending jobs name; a
+    # notice that may mean a job finished only wakes an idle agent to read it.
+    notice = role == "system" and bool(message)
+    if notice:
+        _write_notice_row(session_id, message)
+        if not _may_finish_a_job(message):
             return {"success": True}
 
     # This pod may have been created BY a restore (ADR-035).
@@ -477,7 +495,8 @@ async def handle_message(session_id: str, body: dict[str, Any]) -> dict[str, Any
     except Exception:
         logger.error("pending_agent_restore_failed", session_id=session_id, exc_info=True)
 
-    if session_id in session_store:
+    new_session = session_id not in session_store
+    if not new_session:
         state = session_store[session_id]
         if resume_payload:
             state.session.initialize(resume_payload=resume_payload)
@@ -515,6 +534,13 @@ async def handle_message(session_id: str, body: dict[str, Any]) -> dict[str, Any
     # Sending a picture on its own is an ordinary way to answer "show me" — the
     # presenter photo this pipeline asks for is exactly that — so the content of
     # a turn is words OR attachments, not words alone.
+    if notice:
+        # Wakes the agent only if a job it started has finished, it is idle and
+        # no question is open; otherwise the job is reported at its next model
+        # call.
+        _schedule_wake(state)
+        return {"success": True}
+
     if message or resume_payload or attachments:
         prior_task = state.task
         prior_in_flight = prior_task is not None and not prior_task.done()
@@ -528,6 +554,10 @@ async def handle_message(session_id: str, body: dict[str, Any]) -> dict[str, Any
             prior_task=id(prior_task) if prior_task is not None else None,
             new_task=id(state.task),
         )
+    elif new_session:
+        # The first request to this harness for the session runs no turn: a job
+        # may have finished while no harness was running (ADR-015).
+        _schedule_wake(state)
 
     return {"success": True}
 

@@ -9,6 +9,11 @@ On resume, LangGraph returns the resume value (the decisions payload) as the
 return value of ``interrupt()``, which is then returned as the tool result.
 The harness event publisher reads ``__interrupt__`` from the checkpoint stream
 to emit the ``action_requests`` / ``review_configs`` interrupt event to the UI.
+
+While the graph is paused, nothing but ``Command(resume=...)`` may continue it
+(LangGraph's interrupt contract). System notices never enter the graph: the
+harness writes them to the chat, and the chat gives one to the agent as a
+message only when no question is open (api/routers/sessions.py).
 """
 
 from typing import Any, Literal
