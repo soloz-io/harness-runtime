@@ -8,13 +8,11 @@ Thin orchestrator that delegates to focused sub-modules:
 - ``execution``: graph construction, input preparation, turn helpers
 """
 
-import asyncio
 from typing import Any, Optional
 
 import structlog
 
 from core.execution.executor import ExecutionManager
-from core.metro import ensure_metro_running, ensure_watcher_running
 from core.publishers.event_publisher import EventPublisher
 from core.session.config import AgentConfig, extract_agent_config, persist_system_prompt
 from core.session.execution import (
@@ -75,14 +73,6 @@ class Session:
             set_active_context(
                 workspace_id, app_id, self.session_id, getattr(execution_manager, "_pool", None)
             )
-            try:
-                asyncio.create_task(ensure_metro_running())
-                ensure_watcher_running()
-            except RuntimeError:
-                # No running event loop (e.g. constructed outside an async
-                # context, such as a sync test) — Metro/HMR is best-effort
-                # infrastructure, not a hard dependency of session creation.
-                logger.debug("metro_supervision_skipped_no_event_loop")
 
         # 1. Agent configuration
         cfg: AgentConfig = extract_agent_config(self.agent_definition)

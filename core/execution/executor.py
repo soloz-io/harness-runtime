@@ -28,7 +28,7 @@ from core.execution.state import ExecutionState
 from core.execution.types import Event
 from core.persistence.message_writer import stamp_checkpoint_id
 from core.publishers.event_publisher import EventPublisher
-from core.waypoint_reports import flush_workspace_change, report_question
+from core.waypoint_reports import flush_workspace_change, report_question, report_reply
 
 logger = structlog.get_logger(__name__)
 
@@ -723,6 +723,8 @@ class ExecutionManager:
                     # The turn stopped on an interrupt: the agent asked.
                     if state.unanswered_question:
                         report_question(session_id)
+                    elif state.replied:
+                        report_reply(session_id)
                     flush_workspace_change(session_id)
                     if span:
                         span.end()
@@ -733,6 +735,9 @@ class ExecutionManager:
             # for clients following this session without watching its turn.
             if state.unanswered_question:
                 report_question(session_id)
+            # Or it ended with a reply: tell Waypoint, for the same clients.
+            elif state.replied:
+                report_reply(session_id)
             # And a workspace change the throttle was still holding.
             flush_workspace_change(session_id)
 

@@ -54,11 +54,13 @@ def write_chat_messages(
     offset: int,
     source: str = "deepagents",
     checkpoint_id: Optional[str] = None,
-) -> None:
-    """Insert new messages into chat_messages.
+) -> list[dict[str, Any]]:
+    """Insert new messages into chat_messages, and return those inserted.
 
     Called exactly once per batch of new messages produced by the running
-    graph.  Duplicates are silently ignored via ON CONFLICT DO NOTHING.
+    graph.  Duplicates are silently ignored via ON CONFLICT DO NOTHING, so
+    what is returned is what the session had not recorded before -- a turn's
+    replayed history returns nothing (a reply report reads it, ADR-025).
 
     The ``source`` parameter distinguishes the origin of messages:
     - ``'deepagents'`` (default) — orchestrator messages from root namespace
@@ -69,8 +71,9 @@ def write_chat_messages(
     execution state; this is a read-model projection.
     """
     if not messages:
-        return
+        return []
 
+    inserted: list[dict[str, Any]] = []
     try:
         with pool.connection() as conn:
             with conn.cursor() as cur:
@@ -143,6 +146,7 @@ def write_chat_messages(
                             role=role,
                         )
                     else:
+                        inserted.append(msg)
                         logger.debug(
                             "write_chat_messages_inserted",
                             session_id=session_id,
@@ -156,6 +160,8 @@ def write_chat_messages(
             session_id=session_id,
             message_count=len(messages),
         )
+        return []
+    return inserted
 
 
 def write_agent_output_files(

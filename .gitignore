@@ -11,7 +11,6 @@ htmlcov
 .langgraph_api
 .env
 log
-uv.lock
 .ruff_cache
 deepagents_runtime.egg-info
 harness_runtime.egg-info

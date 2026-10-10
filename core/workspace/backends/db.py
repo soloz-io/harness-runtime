@@ -401,6 +401,8 @@ class DBBackend(StateBackend):
         pattern: str,
         path: str | None = None,
         glob: str | None = None,
+        *,
+        max_count: int | None = None,
     ) -> GrepResult:
         db_matches = self._query_db_grep(pattern, path=path, glob=glob)
 
@@ -415,5 +417,12 @@ class DBBackend(StateBackend):
                 state_matches + to_add,
                 key=lambda x: (x["path"], x["line"]),
             )
-            return GrepResult(matches=merged)
-        return state_result
+            result = GrepResult(matches=merged)
+        else:
+            result = state_result
+
+        if max_count is not None and result.matches is not None and len(result.matches) > max_count:
+            return GrepResult(
+                error=result.error, matches=result.matches[:max_count], truncated=True
+            )
+        return result

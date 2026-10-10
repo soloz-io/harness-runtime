@@ -29,6 +29,10 @@ class ExecutionState:
     # not answered. Recomputed on every root values event; read when the turn
     # ends, to report the question to Waypoint (core/waypoint_reports/questions.py).
     unanswered_question: bool = False
+    # Whether the root agent wrote a reply this turn that the session had not
+    # recorded before. Read when the turn ends, to report the reply to Waypoint
+    # (core/waypoint_reports/replies.py).
+    replied: bool = False
     subagent_stream_outputs: dict[str, str] = field(default_factory=dict)
     subagent_final_outputs: dict[str, str] = field(default_factory=dict)
     subagent_values_messages_count: dict[Namespace, int] = field(default_factory=dict)

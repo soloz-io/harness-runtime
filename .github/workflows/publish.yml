@@ -6,6 +6,7 @@ on:
     paths:
       - ".github/workflows/publish.yml"
       - "pyproject.toml"
+      - "uv.lock"
       - "cli.py"
       - "api/**"
       - "core/**"
@@ -16,6 +17,7 @@ on:
     branches: [main]
     paths:
       - "pyproject.toml"
+      - "uv.lock"
       - "cli.py"
       - "api/**"
       - "core/**"

@@ -13,7 +13,6 @@ Layout, one package per concern:
     workspace/        the filesystem an agent works on
     restore/          restoring a session to an earlier point
     session/          a session's lifecycle: pack, skills, configuration
-    metro/            the Metro bundler integration for app previews
     waypoint_reports/ reports from the sandbox to Waypoint
     services.py       the dependency-injection container
 

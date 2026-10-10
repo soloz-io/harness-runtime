@@ -19,7 +19,7 @@ from core.execution.types import Event
 from core.middleware.background_jobs import is_job_outcome
 from core.persistence.message_writer import write_agent_output_files, write_chat_messages
 from core.publishers.event_publisher import EventPublisher
-from core.waypoint_reports import has_unanswered_question, note_new_messages
+from core.waypoint_reports import has_unanswered_question, is_reply, note_new_messages
 
 logger = structlog.get_logger(__name__)
 
@@ -144,7 +144,11 @@ class RootValuesHandler(EventHandler):
                         new_count=len(serialized),
                         prev_count=prev_count,
                     )
-                    write_chat_messages(self._pool, session_id, serialized, prev_count)
+                    inserted = write_chat_messages(self._pool, session_id, serialized, prev_count)
+                    # A reply the session had not recorded: replayed history is
+                    # skipped by the store, so it never counts (ADR-025).
+                    if any(is_reply(m) for m in inserted):
+                        state.replied = True
                     write_agent_output_files(
                         self._pool,
                         session_id,

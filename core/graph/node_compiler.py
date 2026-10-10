@@ -9,8 +9,10 @@ import structlog
 from langchain_core.runnables import Runnable
 
 try:
+    from deepagents.backends import StateBackend
     from deepagents.middleware.filesystem import FilesystemMiddleware
     from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
+    from deepagents.middleware.summarization import create_summarization_middleware
     from langchain.agents import create_agent
     from langchain.agents.middleware import HumanInTheLoopMiddleware, TodoListMiddleware
 
@@ -26,17 +28,26 @@ logger = structlog.get_logger(__name__)
 
 def build_node_middleware(
     node_config: Dict[str, Any],
+    model: Any,
     response_format: Any = None,
 ) -> list[Any]:
     """Reconstruct the essential deepagents middleware stack for a single node.
+
+    The stack create_deep_agent gives a subagent, in its order: the filesystem,
+    then summarization, then tool-call patching. Summarization is what lets a
+    long node run compact its history instead of failing at the model's context
+    limit; it offloads what it evicts to the same backend the filesystem uses,
+    so the agent can read it back.
 
     When the node has a response_format, appends StructuredOutputMappingMiddleware
     so structured output fields (e.g. approved, feedback) are spread into typed
     state fields accessible to edge routers.
     """
+    backend = StateBackend()
     middleware: list[Any] = [
         TodoListMiddleware(),
-        FilesystemMiddleware(),
+        FilesystemMiddleware(backend=backend),
+        create_summarization_middleware(model, backend),
         HumanInteractionMiddleware(),
         PatchToolCallsMiddleware(),
     ]
@@ -80,7 +91,7 @@ def compile_node(
             logger.warning("node_tool_not_found", node=node.get("id", "unknown"), tool_name=name)
 
     response_format = config.get("response_format")
-    middleware = build_node_middleware(config, response_format)
+    middleware = build_node_middleware(config, model, response_format)
 
     kwargs: dict[str, Any] = {
         "model": model,

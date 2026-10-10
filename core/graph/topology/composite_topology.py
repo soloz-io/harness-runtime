@@ -16,7 +16,6 @@ through the orchestrator's ``task`` tool:
 Existing star/acrylic builders are imported read-only and never modified.
 """
 
-import asyncio
 from typing import Any, Dict, List
 
 import structlog
@@ -33,7 +32,6 @@ from core.graph.topology._shared import (
     ensure_db_backend,
 )
 from core.graph.topology.subagent_builder import build_subagent
-from core.metro import ensure_metro_running, ensure_watcher_running
 from core.middleware.background_jobs import JobReportingMiddleware
 from core.middleware.human_interaction import HumanInteractionMiddleware
 from core.middleware.structured_output import (
@@ -366,15 +364,6 @@ class CompositeTopologyBuilder(TopologyBuilder):
             # dotfile paths like /workspace/.builder/** slip past it anyway
             # (wcmatch's ** skips dotfiles without DOTGLOB) — verified
             # against a live pod.
-            # Attempt Metro/HMR supervision every turn (this function runs
-            # fresh on each one, via _build_graph()) — idempotent no-ops
-            # once Metro/the watcher are already up, or if no Expo project
-            # has been scaffolded into the workspace yet.
-            try:
-                asyncio.create_task(ensure_metro_running())
-                ensure_watcher_running()
-            except RuntimeError:
-                logger.debug("metro_supervision_skipped_no_event_loop")
 
         # Build nested subagent specs (if any)
         nested_subagent_specs: List[Any] = []

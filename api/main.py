@@ -15,7 +15,9 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 
 from api.publisher import set_redis_client
-from api.routers import health, preview, sessions, workspace_files
+from api.routers import computer, health, sessions, workspace_files
+from core.computer import computer_app
+from core.computer import supervisor as computer_supervisor
 from core.publishers.event_publisher import StdioPublisher
 from core.services import RuntimeServices, init_services
 
@@ -43,22 +45,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
 
     await sessions.init_execution_manager_async()
+    # The session's computer app, when its definition declared one and the
+    # image carries it (waypoint ADR-050).
+    computer_supervisor.start(computer_app())
     logger.info("harness_runtime_http_started")
 
     yield
 
     logger.info("harness_runtime_http_shutting_down")
+    await computer_supervisor.stop()
     await sessions.shutdown_execution_manager_async()
 
 
 app = FastAPI(title="Harness Runtime HTTP", version="0.1.0", lifespan=lifespan)
 app.include_router(health.router)
 app.include_router(sessions.router)
-# Before preview.router, for the same reason health/sessions are: preview ends
-# with an allowlisted catch-all ("/{path:path}") that would otherwise shadow
-# these and proxy /workspace/files to Metro.
 app.include_router(workspace_files.router)
-# Registered last, deliberately: preview.router ends with an allowlisted
-# catch-all ("/{path:path}") that must not shadow health/sessions' own
-# specific routes — see preview.py's own comment at that route.
-app.include_router(preview.router)
+# The session's computer (waypoint ADR-050): /computer/* to the image's app.
+app.include_router(computer.router)

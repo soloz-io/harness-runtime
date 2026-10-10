@@ -7,10 +7,12 @@ harness reports each to the SDK, which publishes a session entry for it.
 
     sender.py     how a report is sent, and as whom (the sandbox's identity)
     questions.py  the agent asked the user a question (Question entry)
+    replies.py    the agent replied to the user (Reply entry)
     workspace.py  the workspace may have changed (Files entry)
 """
 
 from core.waypoint_reports.questions import has_unanswered_question, report_question
+from core.waypoint_reports.replies import is_reply, report_reply
 from core.waypoint_reports.workspace import (
     flush_workspace_change,
     note_new_messages,
@@ -20,7 +22,9 @@ from core.waypoint_reports.workspace import (
 __all__ = [
     "flush_workspace_change",
     "has_unanswered_question",
+    "is_reply",
     "note_new_messages",
     "note_tool_finished",
     "report_question",
+    "report_reply",
 ]

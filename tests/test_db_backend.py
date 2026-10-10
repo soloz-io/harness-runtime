@@ -143,3 +143,25 @@ def test_edit_hydration_marks_modified_and_keeps_created_at(
     assert hydrated["content"] == "x\nb"
     assert hydrated.get("created_at")
     assert hydrated.get("modified_at")
+
+
+def test_grep_with_max_count_smaller_than_total_truncates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend = _backend({"/workspace/b.txt": {"content": "hello world"}})
+    _patch_state(backend)
+
+    db_matches = [{"path": "/workspace/a.txt", "line": 1, "text": "hello db"}]
+    monkeypatch.setattr(
+        backend,
+        "_query_db_grep",
+        lambda pattern, path=None, glob=None: db_matches,
+    )
+
+    result = backend.grep("hello", max_count=1)
+
+    assert result.error is None
+    assert result.matches is not None
+    assert len(result.matches) == 1
+    assert result.matches[0]["path"] == "/workspace/a.txt"
+    assert result.truncated is True
