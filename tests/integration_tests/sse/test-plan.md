@@ -13,7 +13,7 @@ See ADR-002 for test plan convention. See `test_sse_pipeline.py` for implementat
 
 ## Setup
 
-- Real LLM (deepseek-v4-flash) via `DEEPSEEK_API_KEY` in `.env` (same as checkpointer tests)
+- Real LLM (deepseek-flash) via `DEEPSEEK_API_KEY` in `.env` (same as checkpointer tests)
 - Real PostgreSQL via `tests/docker-compose.yml` (port 5433)
 - CLI subprocess (`cli.py`) started in HTTP server mode — uvicorn on port 3000
 - `httpx` for HTTP SSE streaming (already available in venv)

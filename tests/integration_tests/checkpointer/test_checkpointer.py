@@ -44,7 +44,7 @@ load_dotenv(dotenv_path=env_path)
 # Agent definitions
 # ---------------------------------------------------------------------------
 
-_MODEL = {"provider": "openai", "model_name": "deepseek-v4-flash"}
+_MODEL = {"provider": "openai", "model_name": "deepseek-flash"}
 
 _GATE_TOOL_SCRIPT = """
 from langchain_core.tools import tool

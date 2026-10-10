@@ -7,7 +7,7 @@ Tests the harness-runtime HTTP server as a black box (same as SDK usage):
   - Validate interrupt delivery and resume flow
 
 Requires:
-  DEEPSEEK_API_KEY   — LLM provider API key (for deepseek-v4-flash)
+  DEEPSEEK_API_KEY   — LLM provider API key (for deepseek-flash)
   DATABASE_URL       — PostgreSQL connection string
 
 Business journey assertions:
@@ -41,7 +41,7 @@ load_dotenv(dotenv_path=env_path)
 # Agent definitions
 # ---------------------------------------------------------------------------
 
-_MODEL = {"provider": "openai", "model_name": "deepseek-v4-flash"}
+_MODEL = {"provider": "openai", "model_name": "deepseek-flash"}
 
 _GATE_TOOL_SCRIPT = """
 from langchain_core.tools import tool

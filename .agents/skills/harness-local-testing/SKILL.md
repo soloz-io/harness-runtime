@@ -37,7 +37,7 @@ initializes the `chat_messages` table, runs pytest, and cleans up on exit.
 
 | Variable | Required | Purpose |
 |----------|----------|---------|
-| `DEEPSEEK_API_KEY` | Yes | LLM provider key (deepseek-v4-flash). Used as the API key value. |
+| `DEEPSEEK_API_KEY` | Yes | LLM provider key (deepseek-flash). Used as the API key value. |
 | `AI_GATEWAY_API_KEY` | Yes | LLM gateway key — set to the same value as `DEEPSEEK_API_KEY`. Required by `ModelFactory.create_model`. |
 | `DATABASE_URL` | Yes | PostgreSQL connection (`postgresql://waypoint:waypoint@localhost:5433/waypoint_test`) |
 | `AGENTREGISTRY_GIT_OWNER` | Yes | Git owner for skills repo clone (`soloz-io`) |

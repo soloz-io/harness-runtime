@@ -20,7 +20,7 @@ from typing import Any, Literal
 
 from langchain_core.tools import tool
 from langgraph.types import interrupt
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 
 class AskUserMedia(BaseModel):
@@ -78,12 +78,26 @@ class AskUserQuestion(BaseModel):
         return self
 
 
+class AskUserButtons(BaseModel):
+    """The dialog's own buttons, worded for this question. Unset keeps the default."""
+
+    submit: str | None = Field(default=None, min_length=1, max_length=40)
+    """The button that sends the answer (default "Submit"; "Approve" for an approval)."""
+
+    skip: str | None = Field(default=None, min_length=1, max_length=40)
+    """The button that declines to answer (default "Skip")."""
+
+    hide_skip: bool | None = None
+    """True when the user must answer: no decline button (an approval has none by default)."""
+
+
 class AskUserInput(BaseModel):
     """The ask_user call. Validated before the tool runs, so a refusal reaches the agent as an error to correct."""
 
     questions: list[AskUserQuestion]
     type: Literal["approval", "clarification"] = "clarification"
     file_path: str | None = None
+    buttons: AskUserButtons | None = None
 
     @model_validator(mode="after")
     def _carousel_is_not_an_approval(self) -> "AskUserInput":
@@ -101,6 +115,7 @@ def ask_user(
     questions: list[AskUserQuestion],
     type: Literal["approval", "clarification"] = "clarification",
     file_path: str | None = None,
+    buttons: AskUserButtons | None = None,
 ) -> str:
     """Relay questions to the user and wait for their response.
 
@@ -124,6 +139,10 @@ def ask_user(
         questions: Array of question objects to present to the user.
         type: 'approval' if asking for phase approval, 'clarification' for discovery questions.
         file_path: Optional path to a file to display alongside the question.
+        buttons: Optional wording for the dialog's buttons, chosen for this
+            question: {submit?: str, skip?: str, hide_skip?: bool}, e.g.
+            {"submit": "Use this voice", "skip": "Record again"}. Unset keeps
+            "Submit"/"Skip" ("Approve" and no skip for an approval).
 
     Returns:
         The text of the user's response (the ``respond`` decision's message).
@@ -138,6 +157,7 @@ def ask_user(
                 "questions": [q.model_dump() for q in questions],
                 "type": type,
                 "file_path": file_path,
+                "buttons": buttons.model_dump(exclude_none=True) if buttons else None,
             },
         }
     )

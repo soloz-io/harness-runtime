@@ -2,7 +2,7 @@ import json
 import os
 import subprocess
 
-agent_definition = {"nodes": [{"config": {"model": {"model_name": "deepseek-v4-flash"}}}]}
+agent_definition = {"nodes": [{"config": {"model": {"model_name": "deepseek-flash"}}}]}
 
 init_req = {
     "type": "control_request",

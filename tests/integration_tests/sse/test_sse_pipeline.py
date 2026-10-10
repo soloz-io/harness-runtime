@@ -7,7 +7,7 @@ Tests the harness-runtime HTTP server as a black box (same as SDK usage):
   - Validate frame ordering, session identity, and fan-out
 
 Requires:
-  DEEPSEEK_API_KEY   — LLM provider API key (deepseek-v4-flash)
+  DEEPSEEK_API_KEY   — LLM provider API key (deepseek-flash)
   DATABASE_URL       — PostgreSQL connection string
   redis-server       — available on PATH
 
@@ -45,7 +45,7 @@ load_dotenv(dotenv_path=env_path)
 # Agent definition (simple — no HITL gate)
 # ---------------------------------------------------------------------------
 
-_MODEL = {"provider": "openai", "model_name": "deepseek-v4-flash"}
+_MODEL = {"provider": "openai", "model_name": "deepseek-flash"}
 
 AGENT_SIMPLE: dict[str, Any] = {
     "tool_definitions": [],

@@ -106,3 +106,33 @@ def test_a_carousel_clarification_pauses_with_its_options(monkeypatch):
     q = AskUserQuestion(question="Pick", layout="carousel", options=[{"label": "A", "media": CLIP}])
     assert ask_user.func(questions=[q]) == "A"
     assert seen["args"]["questions"][0]["options"][0]["media"]["url"] == CLIP["url"]
+
+
+def test_buttons_are_worded_by_the_caller_and_reach_the_dialog(monkeypatch):
+    import core.middleware.human_interaction.ask_user as mod
+
+    seen = {}
+    monkeypatch.setattr(
+        mod, "interrupt", lambda value: seen.update(value) or {"decisions": [{"message": "ok"}]}
+    )
+    buttons = mod.AskUserButtons(submit="Use this voice", skip="Record again")
+    ask_user.func(questions=[AskUserQuestion(question="Approve your voice?")], buttons=buttons)
+    # Only what was set: the dialog keeps its defaults for the rest.
+    assert seen["args"]["buttons"] == {"submit": "Use this voice", "skip": "Record again"}
+
+
+def test_without_buttons_the_dialog_keeps_its_defaults(monkeypatch):
+    import core.middleware.human_interaction.ask_user as mod
+
+    seen = {}
+    monkeypatch.setattr(
+        mod, "interrupt", lambda value: seen.update(value) or {"decisions": [{"message": "ok"}]}
+    )
+    ask_user.func(questions=[AskUserQuestion(question="Ready?")])
+    assert seen["args"]["buttons"] is None
+
+
+@pytest.mark.parametrize("buttons", [{"submit": ""}, {"skip": "x" * 41}])
+def test_a_button_label_is_short_and_not_empty(buttons):
+    with pytest.raises(ValidationError):
+        ask_user.args_schema(questions=[{"question": "Q"}], buttons=buttons)

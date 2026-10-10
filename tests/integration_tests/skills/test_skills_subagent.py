@@ -82,7 +82,7 @@ def _resolve_placeholders(obj: Any) -> Any:
     """Recursively walk the agent definition and replace placeholders."""
     if isinstance(obj, str):
         if obj == "__INJECT_MODEL_NAME__":
-            return "deepseek-v4-flash"
+            return "deepseek-flash"
         # Strip rubric placeholders — no rubric needed for this test
         if obj.startswith("__RUBRIC_") and obj.endswith("__"):
             return None

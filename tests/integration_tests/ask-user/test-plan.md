@@ -13,10 +13,10 @@ See ADR-002 for test plan convention. See `test_ask_user.py` for implementation.
 
 ## Setup
 
-- Real LLM (deepseek-v4-flash) via `DEEPSEEK_API_KEY` in `.env`
+- Real LLM (deepseek-flash) via `DEEPSEEK_API_KEY` in `.env`
 - Real PostgreSQL via `tests/docker-compose.yml` (port 5433)
 - CLI subprocess (`cli.py`) — same code path as SDK consumers
 
 ## Known Issues
 
-- H4 is flaky with deepseek-v4-flash: model is non-deterministic for tool calling and can exceed the 100s frame-read timeout. Not a code defect.
+- H4 is flaky with deepseek-flash: model is non-deterministic for tool calling and can exceed the 100s frame-read timeout. Not a code defect.
