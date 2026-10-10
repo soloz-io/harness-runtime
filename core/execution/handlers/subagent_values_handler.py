@@ -57,9 +57,24 @@ class SubagentValuesHandler(EventHandler):
                     app_id=state.app_id,
                 )
 
+        # ---- Todos ----
+        # A specialist's or subagent's todo list reaches the browser live, as
+        # the agent wrote it, for the chat's task list (waypoint ADR-052). Its
+        # write_todos calls are stored with its messages below, so a reload has
+        # the same lists. Published only when the list changed.
+        ns = event.namespace
+        todos = data.get("todos")
+        if isinstance(todos, list) and todos != state.subagent_todos.get(ns):
+            state.subagent_todos[ns] = todos
+            agent = state.subagent_names.get(ns) or (str(ns[-1]).split(":")[0] if ns else "agent")
+            publisher.publish_values(
+                session_id=session_id,
+                messages=[],
+                todos={"agent": agent, "namespace": list(ns), "todos": todos},
+            )
+
         # ---- Messages ----
         msgs = data.get("messages", [])
-        ns = event.namespace
         prev_count = state.subagent_values_messages_count.get(ns, 0)
         if len(msgs) > prev_count:
             state.subagent_values_messages_count[ns] = len(msgs)

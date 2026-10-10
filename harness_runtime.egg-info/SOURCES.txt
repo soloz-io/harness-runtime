@@ -6,12 +6,14 @@ api/internal_auth.py
 api/main.py
 api/publisher.py
 api/routers/__init__.py
+api/routers/computer.py
 api/routers/health.py
-api/routers/preview.py
 api/routers/sessions.py
 api/routers/workspace_files.py
 core/__init__.py
 core/services.py
+core/computer/__init__.py
+core/computer/app.py
 core/execution/__init__.py
 core/execution/executor.py
 core/execution/helpers.py
@@ -41,11 +43,6 @@ core/graph/topology/subagent_builder.py
 core/llm/__init__.py
 core/llm/factory.py
 core/llm/identifier.py
-core/metro/__init__.py
-core/metro/checkpoint_trigger.py
-core/metro/config.py
-core/metro/supervisor.py
-core/metro/watcher.py
 core/middleware/__init__.py
 core/middleware/background_jobs/__init__.py
 core/middleware/background_jobs/middleware.py
@@ -110,6 +107,7 @@ tests/test_artifact_reader.py
 tests/test_ask_user_options.py
 tests/test_attachment_content.py
 tests/test_checkpoint_restore.py
+tests/test_computer.py
 tests/test_db_backend.py
 tests/test_hybrid_topology.py
 tests/test_internal_auth.py
@@ -122,6 +120,7 @@ tests/test_publisher_ttl.py
 tests/test_question_report.py
 tests/test_reply_report.py
 tests/test_skills_image_mode.py
+tests/test_subagent_todos.py
 tests/test_tools_image_mode.py
 tests/test_workspace_files.py
 tests/test_workspace_report.py

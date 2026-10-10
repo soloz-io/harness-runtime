@@ -20,6 +20,8 @@ class ExecutionState:
     streamed_text: str = ""
     current_tool_use_blocks: list[dict[str, Any]] = field(default_factory=list)
     ns_to_tool_call: dict[Namespace, str] = field(default_factory=dict)
+    # Each agent's last published todo list, so an unchanged list is not resent (ADR-052).
+    subagent_todos: dict[Namespace, list] = field(default_factory=dict)
     subagent_names: dict[Namespace, str] = field(default_factory=dict)
     last_structured_response: dict[str, Any] | None = None
     last_files: dict[str, Any] = field(default_factory=dict)

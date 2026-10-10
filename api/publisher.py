@@ -145,12 +145,16 @@ class SSEEventPublisher(EventPublisher):
         messages: list[dict[str, Any]],
         files: Optional[dict[str, Any]] = None,
         usage: Optional[dict[str, int]] = None,
+        todos: Optional[dict[str, Any]] = None,
     ) -> None:
         data: dict[str, Any] = {"messages": messages}
         if files:
             data["files"] = files
         if usage:
             data["usage"] = usage
+        if todos:
+            # One agent's todo list, as it wrote it (waypoint ADR-052).
+            data["todos"] = todos
         self._write(self._protocol_event("values", data))
 
     def publish_system_init(

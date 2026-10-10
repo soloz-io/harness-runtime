@@ -47,6 +47,7 @@ class EventPublisher(ABC):
         messages: list[dict[str, Any]],
         files: Optional[dict[str, Any]] = None,
         usage: Optional[dict[str, int]] = None,
+        todos: Optional[dict[str, Any]] = None,
     ) -> None: ...
 
     @abstractmethod
@@ -197,6 +198,7 @@ class StdioPublisher(EventPublisher):
         messages: list[dict[str, Any]],
         files: Optional[dict[str, Any]] = None,
         usage: Optional[dict[str, int]] = None,
+        todos: Optional[dict[str, Any]] = None,
     ) -> None:
         pass
 
