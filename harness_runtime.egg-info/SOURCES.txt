@@ -44,6 +44,7 @@ core/llm/__init__.py
 core/llm/factory.py
 core/llm/identifier.py
 core/middleware/__init__.py
+core/middleware/computer_reports.py
 core/middleware/invalid_tool_calls.py
 core/middleware/todos.py
 core/middleware/background_jobs/__init__.py
@@ -110,6 +111,7 @@ tests/test_ask_user_options.py
 tests/test_attachment_content.py
 tests/test_checkpoint_restore.py
 tests/test_computer.py
+tests/test_computer_reports.py
 tests/test_db_backend.py
 tests/test_hybrid_topology.py
 tests/test_internal_auth.py

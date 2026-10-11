@@ -29,6 +29,7 @@ from core.graph.interfaces import TopologyBuilder
 from core.graph.topology.specialist_builder import build_specialist
 from core.graph.topology.subagent_builder import build_subagent
 from core.middleware.background_jobs import JobReportingMiddleware
+from core.middleware.computer_reports import ComputerReportMiddleware
 from core.middleware.human_interaction import HumanInteractionMiddleware
 from core.middleware.invalid_tool_calls import InvalidToolCallRetryMiddleware
 from core.middleware.structured_output import (
@@ -235,6 +236,8 @@ class CompositeTopologyBuilder(TopologyBuilder):
             # Before each model call: the outcomes of the jobs the specialists
             # started, whose run ids came back with their state (ADR-015).
             JobReportingMiddleware(),
+            # And what the session's computer reports (computer/report).
+            ComputerReportMiddleware(),
             CodeInterpreterMiddleware(timeout=300),
             # An unparseable tool call (an ask_user above all) goes back to the
             # model to call again, instead of silently ending the turn.

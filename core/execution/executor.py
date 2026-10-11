@@ -238,14 +238,15 @@ class ExecutionManager:
         writes = getattr(cpt, "pending_writes", None) or []
         return any(len(w) >= 2 and w[1] == _INTERRUPT_CHANNEL for w in writes)
 
-    async def has_unreported_jobs(self, session_id: str) -> bool:
-        """Whether an idle session has finished jobs its agent has not been told
-        about, so a wake-up run would report them (ADR-015).
+    async def has_something_to_report(self, session_id: str) -> bool:
+        """Whether an idle session has something its agent has not been told
+        about, so a wake-up run would report it (ADR-015): a job it started has
+        finished, or its computer sent a report (core/middleware/computer_reports.py).
 
         False while the graph is paused on a question -- the answer's resume
         reports them -- and False whenever the check cannot be made: a wake-up
         on a paused graph would abandon the user's question, so doubt means no
-        wake-up. The job stays pending and is reported at the next model call.
+        wake-up. What is pending is reported at the next model call.
         """
         checkpointer = self._async_checkpointer or self.checkpointer
         if checkpointer is None or self._pool is None:
@@ -261,16 +262,20 @@ class ExecutionManager:
             writes = getattr(cpt, "pending_writes", None) or []
             if any(len(w) >= 2 and w[1] == _INTERRUPT_CHANNEL for w in writes):
                 return False
-            pending = list((cpt.checkpoint.get("channel_values") or {}).get("pending_jobs") or [])
-            if not pending:
-                return False
-            from core.middleware.background_jobs import finished_jobs
+            values = cpt.checkpoint.get("channel_values") or {}
+            pending = list(values.get("pending_jobs") or [])
+            if pending:
+                from core.middleware.background_jobs import finished_jobs
 
-            finished = await asyncio.to_thread(finished_jobs, self._pool, pending)
+                if await asyncio.to_thread(finished_jobs, self._pool, pending):
+                    return True
+            from core.middleware.computer_reports import SEEN_KEY, has_unread_reports
+
+            seen = int(values.get(SEEN_KEY, -1))
+            return await asyncio.to_thread(has_unread_reports, self._pool, session_id, seen)
         except Exception as e:
-            logger.warning("unreported_jobs_check_failed", session_id=session_id, error=str(e))
+            logger.warning("wake_check_failed", session_id=session_id, error=str(e))
             return False
-        return bool(finished)
 
     async def _resume_from_pending_interrupt(
         self,

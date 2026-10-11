@@ -290,8 +290,9 @@ async def _wake_async(state: SessionState) -> None:
 
     Decided under the turn lock, so no turn can start between the check and the
     run. The check is the executor's: no run in progress, no question open, and
-    a pending job finished. The run's first model call is preceded by the
-    job-reporting middleware, which tells the agent.
+    a pending job finished or the computer sent a report. The run's first model
+    call is preceded by the job-reporting and computer-report middleware, which
+    tell the agent.
     """
     session = state.session
     session_id = session.session_id
@@ -300,7 +301,7 @@ async def _wake_async(state: SessionState) -> None:
     publisher: Optional[SSEEventPublisher] = None
     try:
         async with state.turn_lock:
-            if not await _get_execution_manager().has_unreported_jobs(session_id):
+            if not await _get_execution_manager().has_something_to_report(session_id):
                 logger.info("wake_skipped_nothing_to_report", session_id=session_id)
                 return
             _trim_sentinel(session_id)
@@ -535,9 +536,9 @@ async def handle_message(session_id: str, body: dict[str, Any]) -> dict[str, Any
     # presenter photo this pipeline asks for is exactly that — so the content of
     # a turn is words OR attachments, not words alone.
     if notice:
-        # Wakes the agent only if a job it started has finished, it is idle and
-        # no question is open; otherwise the job is reported at its next model
-        # call.
+        # Wakes the agent only if a job it started has finished or its computer
+        # sent a report (computer/report), it is idle and no question is open;
+        # otherwise either is reported at its next model call.
         _schedule_wake(state)
         return {"success": True}
 

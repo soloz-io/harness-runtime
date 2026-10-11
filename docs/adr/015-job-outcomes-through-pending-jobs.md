@@ -277,6 +277,33 @@ A `job/started` notice is written to the chat for its task list and does
 nothing else. The tool that started the job has already told the agent, and its
 result added the run id to `pending_jobs`.
 
+### Amendment 2026-10-11: a session's computer reports the same way
+
+A computer app (waypoint ADR-050) sees what the agent cannot: what its work
+does when it runs in front of the user. It reports through the page as a system
+notice of type `computer/report`, with a `title` for the chat and a `message`
+for the agent. Before this amendment such a notice was written to the chat and
+went no further: the user saw "sent to the agent" and the agent never read it.
+
+- **The notice row is the record.** No new store: the harness already writes
+  every notice to `chat_messages` before anything else, so a report that arrives
+  while no harness is running is not lost.
+- **The main agent holds a read mark.** `computer_reports_seen`, a field of its
+  graph state, is the sequence of the last notice row it has read.
+- **Reporting happens before the next model call**, as for jobs:
+  `ComputerReportMiddleware`, next to the job-reporting middleware, reads the
+  notice rows after the mark, adds each report as a `HumanMessage` marked
+  `computer_report` (the chat does not show it twice), and moves the mark. A
+  report that arrives mid-run is read at the next model call.
+- **Waking.** The wake-up check (`has_something_to_report`) asks for a finished
+  job *or* an unread report. Its rules are unchanged: never while a question is
+  open, and doubt means no wake-up.
+- **Not a turn.** A report is never the user's input and never answers an open
+  question; it waits for the answer.
+
+The platform carries a generic report. What a report says, and what the agent
+does about it, are the pack's.
+
 ### Alternatives considered
 
 - **A session event inbox, written by the harness when it receives a notice.**
@@ -349,6 +376,8 @@ ADR-039.
   - the job-tracking middleware on every agent (the `pending_jobs` field, its
     merge rule, and `wrap_tool_call`);
   - the job-reporting middleware on the main agent (`before_model`);
+  - the computer-report middleware on the main agent (`before_model`,
+    amendment 2026-10-11), with its read mark `computer_reports_seen`;
   - the wake-up check and the internal wake-up run (run reason `external_event`,
     no input messages);
   - the chat history writer skips notification messages.
