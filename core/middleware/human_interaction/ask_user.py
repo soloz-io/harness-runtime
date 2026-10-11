@@ -81,14 +81,27 @@ class AskUserQuestion(BaseModel):
 class AskUserButtons(BaseModel):
     """The dialog's own buttons, worded for this question. Unset keeps the default."""
 
-    submit: str | None = Field(default=None, min_length=1, max_length=40)
-    """The button that sends the answer (default "Submit"; "Approve" for an approval)."""
-
-    skip: str | None = Field(default=None, min_length=1, max_length=40)
-    """The button that declines to answer (default "Skip")."""
-
-    hide_skip: bool | None = None
-    """True when the user must answer: no decline button (an approval has none by default)."""
+    # Descriptions, not attribute docstrings: they are what reaches the model's
+    # tool schema.
+    submit: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=40,
+        description='The button that sends the answer, saying what answering does, e.g. "Use this voice". '
+        'Default "Submit" ("Approve" for an approval).',
+    )
+    skip: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=40,
+        description='The button that declines to answer, saying what declining means, e.g. "Record again". '
+        'Default "Skip".',
+    )
+    hide_skip: bool | None = Field(
+        default=None,
+        description="True only when the user must answer to go on: no decline button. "
+        "An approval has none by default.",
+    )
 
 
 class AskUserInput(BaseModel):
@@ -143,6 +156,13 @@ def ask_user(
             question: {submit?: str, skip?: str, hide_skip?: bool}, e.g.
             {"submit": "Use this voice", "skip": "Record again"}. Unset keeps
             "Submit"/"Skip" ("Approve" and no skip for an approval).
+
+    A complete call, every bracket closed once — `buttons` sits beside
+    `questions`, not inside a question:
+
+        {"questions": [{"question": "Which voice should narrate?",
+                        "options": ["Mine", "Choose later"]}],
+         "buttons": {"submit": "Save my answer", "skip": "Not now"}}
 
     Returns:
         The text of the user's response (the ``respond`` decision's message).

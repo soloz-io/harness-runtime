@@ -1,10 +1,8 @@
 """
-Shared helpers for composite topology builders (hybrid).
-
-Extracts the orchestrator construction logic used by the star topology
-into reusable functions so a hybrid builder (one orchestrator + a mix of
-declarative subagents, nested deep agents, and nested subgraphs) can build
-its graph without modifying the existing star/acrylic builders.
+Builds the specialists of a composite topology: each a deep agent
+(``create_deep_agent``) the orchestrator delegates to, with its tools and its
+middleware. Nested subagents, one level down inside a specialist, are built by
+``subagent_builder``.
 """
 
 from pathlib import Path
@@ -16,9 +14,11 @@ from langchain_quickjs import CodeInterpreterMiddleware
 
 from core.middleware.background_jobs import JobTrackingMiddleware
 from core.middleware.custom_tool_middleware import CustomToolMiddleware
+from core.middleware.invalid_tool_calls import InvalidToolCallRetryMiddleware
 from core.middleware.rubric_middleware import build_rubric_middlewares
 from core.middleware.shell_middleware import ShellMiddleware
 from core.middleware.structured_output import build_tool_strategy, resolve_structured_output_model
+from core.middleware.todos import TodoMiddleware
 from core.middleware.url_fetch_middleware import UrlFetchMiddleware
 
 logger = structlog.get_logger(__name__)
@@ -32,27 +32,7 @@ except ImportError as e:
     ) from e
 
 
-def ensure_db_backend(
-    backend: Any,
-    *,
-    workspace_id: str | None,
-    session_id: str | None,
-    db_pool: Any,
-) -> Any:
-    """Auto-construct a DBBackend when one isn't pre-built."""
-    if backend is None and workspace_id and session_id and db_pool is not None:
-        from core.workspace.backends.db import DBBackend
-
-        backend = DBBackend(
-            workspace_id=workspace_id,
-            session_id=session_id,
-            pool=db_pool,
-        )
-        logger.info("db_backend_auto_constructed")
-    return backend
-
-
-def resolve_tools_from_config(
+def resolve_specialist_tools(
     config: Dict[str, Any],
     available_tools: Dict[str, Any],
     *,
@@ -74,7 +54,7 @@ def resolve_tools_from_config(
     return tools
 
 
-def build_middleware_stack(
+def build_specialist_middleware(
     config: Dict[str, Any],
     model: Any,
     *,
@@ -93,7 +73,7 @@ def build_middleware_stack(
     coexist; a specialist's own prompt is free to use either).
 
     ``extra_tool_dirs`` (typically a skill's own ``scripts/`` directory —
-    see ``build_deep_agent_runnable``) is searched by ``run_tool`` alongside
+    see ``build_specialist``) is searched by ``run_tool`` alongside
     ``tools_spec``'s node/shared dirs, so a skill can ship an executable
     CLI wrapper (e.g. ``compile_check_cli.py``) without also requiring a
     separate ``agents/<node-id>/tools/`` folder baked into the image.
@@ -110,6 +90,10 @@ def build_middleware_stack(
     # The jobs this specialist starts: their run ids return to the orchestrator
     # with its state, and the orchestrator is told when they finish (ADR-015).
     middleware_stack.append(JobTrackingMiddleware())
+    # write_todos: the specialist's plan, shown to the user as task progress (ADR-052).
+    middleware_stack.append(TodoMiddleware())
+    # An unparseable tool call goes back to the model, not to the end of its run.
+    middleware_stack.append(InvalidToolCallRetryMiddleware())
     tool_dirs: list[Path] = list(tools_spec.search_dirs) if tools_spec else []
     tool_dirs.extend(extra_tool_dirs or [])
     if tool_dirs:
@@ -121,7 +105,7 @@ def build_middleware_stack(
     return middleware_stack
 
 
-def build_deep_agent_runnable(
+def build_specialist(
     config: Dict[str, Any],
     available_tools: Dict[str, Any],
     *,
@@ -152,7 +136,7 @@ def build_deep_agent_runnable(
     state_schema = config.get("state_schema")
     context_schema = config.get("context_schema")
 
-    tools = resolve_tools_from_config(config, available_tools, owner=node_id or "node")
+    tools = resolve_specialist_tools(config, available_tools, owner=node_id or "node")
 
     logger.info(
         "deep_agent_config_extracted",
@@ -213,7 +197,7 @@ def build_deep_agent_runnable(
         if (scripts_dir := Path(skill_path) / "scripts").is_dir()
     ]
 
-    middleware_stack = build_middleware_stack(
+    middleware_stack = build_specialist_middleware(
         config,
         deep_agent_kwargs["model"],
         tools_spec=(tools_ctx.node_tools.get(node_id) if tools_ctx and node_id else None),

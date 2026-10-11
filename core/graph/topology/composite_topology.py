@@ -22,22 +22,20 @@ import structlog
 
 # Add these new imports for the orchestrator state fix
 from deepagents import DeepAgentState
-from langchain.agents.middleware import TodoListMiddleware
 from langchain_core.runnables import Runnable
 from langchain_quickjs import CodeInterpreterMiddleware
 
 from core.graph.interfaces import TopologyBuilder
-from core.graph.topology._shared import (
-    build_deep_agent_runnable,
-    ensure_db_backend,
-)
+from core.graph.topology.specialist_builder import build_specialist
 from core.graph.topology.subagent_builder import build_subagent
 from core.middleware.background_jobs import JobReportingMiddleware
 from core.middleware.human_interaction import HumanInteractionMiddleware
+from core.middleware.invalid_tool_calls import InvalidToolCallRetryMiddleware
 from core.middleware.structured_output import (
     build_tool_strategy,
     resolve_structured_output_model,
 )
+from core.middleware.todos import TodoMiddleware
 from core.workspace.agent_backend import (
     is_s3_mode,
 )
@@ -61,6 +59,26 @@ except ImportError as e:
         "langchain package is required but not installed. "
         "Install it with: pip install langchain>=1.0.0"
     ) from e
+
+
+def ensure_db_backend(
+    backend: Any,
+    *,
+    workspace_id: str | None,
+    session_id: str | None,
+    db_pool: Any,
+) -> Any:
+    """Auto-construct a DBBackend when one isn't pre-built."""
+    if backend is None and workspace_id and session_id and db_pool is not None:
+        from core.workspace.backends.db import DBBackend
+
+        backend = DBBackend(
+            workspace_id=workspace_id,
+            session_id=session_id,
+            pool=db_pool,
+        )
+        logger.info("db_backend_auto_constructed")
+    return backend
 
 
 class CompositeTopologyBuilder(TopologyBuilder):
@@ -212,12 +230,15 @@ class CompositeTopologyBuilder(TopologyBuilder):
         # work is routing from reports it has already received, so the summary's
         # intent/artifacts/next-steps is the part it actually needs.
         middleware_stack: list[Any] = [
-            TodoListMiddleware(),
+            TodoMiddleware(),
             HumanInteractionMiddleware(),
             # Before each model call: the outcomes of the jobs the specialists
             # started, whose run ids came back with their state (ADR-015).
             JobReportingMiddleware(),
             CodeInterpreterMiddleware(timeout=300),
+            # An unparseable tool call (an ask_user above all) goes back to the
+            # model to call again, instead of silently ending the turn.
+            InvalidToolCallRetryMiddleware(),
         ]
 
         # FIX: Provide DeepAgentState to SubAgentMiddleware
@@ -383,7 +404,7 @@ class CompositeTopologyBuilder(TopologyBuilder):
                 )
             )
 
-        nested_runnable = build_deep_agent_runnable(
+        nested_runnable = build_specialist(
             specialist_config,
             available_tools,
             checkpointer=None,  # Specialists DO NOT get checkpointer

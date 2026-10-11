@@ -122,7 +122,7 @@ def test_dispatch_mixed_specialists(monkeypatch: Any) -> None:
         subagent_builds.append(config)
         return {"name": config.get("name"), "declarative": True}
 
-    def fake_build_deep_agent_runnable(
+    def fake_build_specialist(
         config: dict[str, Any],
         available_tools: dict[str, Any],
         *,
@@ -148,7 +148,7 @@ def test_dispatch_mixed_specialists(monkeypatch: Any) -> None:
         return SENTINEL_SUBGRAPH
 
     monkeypatch.setattr(hybrid_mod, "build_subagent", fake_build_subagent)
-    monkeypatch.setattr(hybrid_mod, "build_deep_agent_runnable", fake_build_deep_agent_runnable)
+    monkeypatch.setattr(hybrid_mod, "build_specialist", fake_build_specialist)
     monkeypatch.setattr(AcrylicTopologyBuilder, "build", fake_acrylic_build)
 
     result = HybridTopologyBuilder().build(_hybrid_definition(), {}, MemorySaver())
@@ -203,7 +203,7 @@ def test_missing_orchestrator_falls_back_to_first_node(monkeypatch: Any) -> None
     ) -> dict[str, Any]:
         return {"name": config.get("name"), "declarative": True}
 
-    def fake_build_deep_agent_runnable(
+    def fake_build_specialist(
         config: dict[str, Any],
         available_tools: dict[str, Any],
         *,
@@ -228,7 +228,7 @@ def test_missing_orchestrator_falls_back_to_first_node(monkeypatch: Any) -> None
         return SENTINEL_SUBGRAPH
 
     monkeypatch.setattr(hybrid_mod, "build_subagent", fake_build_subagent)
-    monkeypatch.setattr(hybrid_mod, "build_deep_agent_runnable", fake_build_deep_agent_runnable)
+    monkeypatch.setattr(hybrid_mod, "build_specialist", fake_build_specialist)
     monkeypatch.setattr(AcrylicTopologyBuilder, "build", fake_acrylic_build)
 
     HybridTopologyBuilder().build(definition, {}, MemorySaver())

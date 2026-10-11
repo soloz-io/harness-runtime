@@ -25,8 +25,10 @@ from core.graph.state_schema import create_state_schema_from_config
 from core.llm.factory import ModelFactory
 from core.middleware.background_jobs import JobTrackingMiddleware
 from core.middleware.custom_tool_middleware import CustomToolMiddleware
+from core.middleware.invalid_tool_calls import InvalidToolCallRetryMiddleware
 from core.middleware.rubric_middleware import build_rubric_middlewares
 from core.middleware.shell_middleware import ShellMiddleware
+from core.middleware.todos import TodoMiddleware
 
 # ShellMiddleware exposes load_skill, which stays unconditional since
 # every specialist needs it. DSL compilation and action-manifest
@@ -178,11 +180,11 @@ def _build_subagent_spec(
     """Build a declarative SubAgent dict.
 
     Returns a SubAgent spec consumed by the orchestrator's create_deep_agent.
-    create_deep_agent compiles it via create_agent and auto-adds
-    TodoListMiddleware, FilesystemMiddleware, SummarizationMiddleware,
-    PatchToolCallsMiddleware, and SkillsMiddleware (if skills are set).
-    This function only provides middleware that create_deep_agent does not:
-    RubricMiddleware, ShellMiddleware, CustomToolMiddleware.
+    create_deep_agent compiles it via create_agent and adds
+    FilesystemMiddleware, PatchToolCallsMiddleware, and SkillsMiddleware (if
+    skills are set); deepagents 0.7 adds no TodoListMiddleware. This function
+    provides the rest: RubricMiddleware, ShellMiddleware, CustomToolMiddleware,
+    InvalidToolCallRetryMiddleware and TodoMiddleware (core/middleware/todos.py).
     """
 
     state_schema_config = specialist_config.get("state_schema")
@@ -205,6 +207,10 @@ def _build_subagent_spec(
         middleware_stack.extend(rubric_middlewares)
 
     middleware_stack.append(ShellMiddleware())
+    # An unparseable tool call goes back to the model, not to the end of its run.
+    middleware_stack.append(InvalidToolCallRetryMiddleware())
+    # write_todos: the subagent's plan, shown to the user as task progress (ADR-052).
+    middleware_stack.append(TodoMiddleware())
     # The jobs this subagent starts return to its parent with its state (ADR-015).
     middleware_stack.append(JobTrackingMiddleware())
 

@@ -14,9 +14,11 @@ try:
     from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
     from deepagents.middleware.summarization import create_summarization_middleware
     from langchain.agents import create_agent
-    from langchain.agents.middleware import HumanInTheLoopMiddleware, TodoListMiddleware
+    from langchain.agents.middleware import HumanInTheLoopMiddleware
 
     from core.middleware.human_interaction import HumanInteractionMiddleware
+    from core.middleware.invalid_tool_calls import InvalidToolCallRetryMiddleware
+    from core.middleware.todos import TodoMiddleware
 except ImportError as e:
     raise ImportError(
         "deepagents package is required but not installed. "
@@ -45,11 +47,13 @@ def build_node_middleware(
     """
     backend = StateBackend()
     middleware: list[Any] = [
-        TodoListMiddleware(),
+        TodoMiddleware(),
         FilesystemMiddleware(backend=backend),
         create_summarization_middleware(model, backend),
         HumanInteractionMiddleware(),
         PatchToolCallsMiddleware(),
+        # An unparseable tool call goes back to the model, not to the end of the turn.
+        InvalidToolCallRetryMiddleware(),
     ]
     interrupt_on_config = node_config.get("interrupt_on")
     if interrupt_on_config:

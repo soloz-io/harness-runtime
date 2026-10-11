@@ -9,7 +9,7 @@ tool result itself (core/execution/queued_jobs.py).
 
 from __future__ import annotations
 
-from core.graph.topology._shared import build_middleware_stack
+from core.graph.topology.specialist_builder import build_specialist_middleware
 from core.middleware.human_interaction import HumanInteractionMiddleware
 
 
@@ -22,6 +22,6 @@ def test_human_interaction_is_ask_user_alone():
 
 
 def test_a_specialist_never_asks_the_user():
-    tools = tool_names(build_middleware_stack({}, model=None))
+    tools = tool_names(build_specialist_middleware({}, model=None))
     assert "ask_user" not in tools
     assert "task_queue" not in tools
