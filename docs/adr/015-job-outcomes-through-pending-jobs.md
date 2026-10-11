@@ -93,7 +93,10 @@ Facts the decision rests on:
   result. Any other new input either answers the question or abandons it,
   whatever its role.
 - **The agent already knows which jobs it started.** Each job CLI's result
-  carries the `run_id` that `runs/start` returned.
+  carries the `run_id` that `runs/start` returned: one JSON object
+  `{"status": "QUEUED", "run_id": ...}` per job, so a CLI that starts several
+  prints one line for each, and every one is tracked. (Only the first was,
+  until a CLI started several jobs at once and the rest woke nobody.)
 - **Job status is already stored.** `workflow_runs` holds every run's status
   (running, completed, failed, cancelled) and error. It does not store the
   outcome message, url or `pass`: the job's final step computes those and sends

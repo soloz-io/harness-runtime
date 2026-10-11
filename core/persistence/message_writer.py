@@ -295,3 +295,80 @@ def stamp_checkpoint_id(pool: ConnectionPool, session_id: str, checkpoint_id: st
             checkpoint_id=checkpoint_id,
             exc_info=True,
         )
+
+
+# ── A turn the user stopped ─────────────────────────────────────────────────
+
+STOPPED_KEY = "stopped"
+
+
+def _unanswered_calls(
+    rows: list[tuple[str, dict[str, Any]]],
+) -> list[tuple[str, dict[str, Any], dict[str, Any]]]:
+    """(source, call, the calling message's additional_kwargs) for every tool call
+    in `rows` with no tool result after it, in order."""
+    answered = {
+        msg.get("tool_call_id")
+        for _, msg in rows
+        if msg.get("type") == "tool" and msg.get("tool_call_id")
+    }
+    out = []
+    for source, msg in rows:
+        for call in msg.get("tool_calls") or []:
+            if call.get("id") and call["id"] not in answered:
+                out.append((source, call, msg.get("additional_kwargs") or {}))
+    return out
+
+
+def record_stopped_steps(pool: ConnectionPool, session_id: str) -> int:
+    """Close the current turn's unanswered tool calls as stopped; return how many.
+
+    When the user stops a turn, its calls in flight never get a result, and the
+    stored history keeps them unanswered — so the chat, rebuilding the turn from
+    history on a reload, showed them still running. Each gets one result row,
+    empty and marked `stopped` (additional_kwargs), written with its call's
+    source and, for a specialist's call, its namespace and parent call, so it
+    groups where the call does. The chat shows a stopped step with no status.
+
+    The current turn is everything after the user's last message. Failures are
+    logged and never raised: the run is already cancelled either way.
+    """
+    try:
+        with pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT source, message FROM chat_messages
+                    WHERE session_id = %s
+                      AND sequence > COALESCE((
+                        SELECT MAX(sequence) FROM chat_messages
+                        WHERE session_id = %s AND role = 'user' AND source <> 'subagent'
+                      ), -1)
+                    ORDER BY sequence
+                    """,
+                    (session_id, session_id),
+                )
+                rows = [(r[0], r[1]) for r in cur.fetchall()]
+    except Exception as e:  # noqa: BLE001 — the cancel stands; only the record is missing
+        logger.error("record_stopped_steps_read_failed", session_id=session_id, error=str(e))
+        return 0
+
+    unanswered = _unanswered_calls(rows)
+    by_source: dict[str, list[dict[str, Any]]] = {}
+    for source, call, kwargs in unanswered:
+        extra = {k: kwargs[k] for k in ("namespace", "tool_call_id") if k in kwargs}
+        by_source.setdefault(source, []).append(
+            {
+                "type": "tool",
+                "id": f"stopped-{call['id']}",
+                "tool_call_id": call["id"],
+                "name": call.get("name") or "",
+                "content": "",
+                "additional_kwargs": {STOPPED_KEY: True, **extra},
+            }
+        )
+    for source, messages in by_source.items():
+        write_chat_messages(pool, session_id, messages, 0, source=source)
+    if unanswered:
+        logger.info("turn_stopped_steps_recorded", session_id=session_id, count=len(unanswered))
+    return len(unanswered)

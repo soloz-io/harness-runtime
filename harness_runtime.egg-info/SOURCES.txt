@@ -115,6 +115,7 @@ tests/test_hybrid_topology.py
 tests/test_internal_auth.py
 tests/test_interrupt_frame_order.py
 tests/test_invalid_tool_calls.py
+tests/test_job_tracking.py
 tests/test_middleware_tools.py
 tests/test_node_middleware.py
 tests/test_pack_fetch.py
@@ -124,6 +125,7 @@ tests/test_question_report.py
 tests/test_reply_report.py
 tests/test_skills_image_mode.py
 tests/test_specialist_middleware.py
+tests/test_stopped_turn.py
 tests/test_subagent_todos.py
 tests/test_todos.py
 tests/test_tools_image_mode.py

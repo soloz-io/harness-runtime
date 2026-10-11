@@ -17,6 +17,7 @@ from core.execution.helpers import extract_interrupt_payload, serialize_messages
 from core.execution.state import ExecutionState
 from core.execution.types import Event
 from core.middleware.background_jobs import is_job_outcome
+from core.middleware.todos import is_todo_reminder
 from core.persistence.message_writer import write_agent_output_files, write_chat_messages
 from core.publishers.event_publisher import EventPublisher
 from core.waypoint_reports import has_unanswered_question, is_reply, note_new_messages
@@ -127,7 +128,12 @@ class RootValuesHandler(EventHandler):
             state.values_messages_count = len(msgs)
             # A reported job outcome is the agent's to read, not the chat's to
             # show: the chat already shows the job's own notice row (ADR-015).
-            serialized = [m for m in serialize_messages_for_values(msgs) if not is_job_outcome(m)]
+            # The end-of-run todo notice likewise (core/middleware/todos.py).
+            serialized = [
+                m
+                for m in serialize_messages_for_values(msgs)
+                if not is_job_outcome(m) and not is_todo_reminder(m)
+            ]
             if serialized:
                 for msg in serialized:
                     if (

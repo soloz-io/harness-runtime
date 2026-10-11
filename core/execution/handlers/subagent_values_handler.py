@@ -11,6 +11,7 @@ from core.execution.handlers import EventHandler
 from core.execution.helpers import serialize_messages_for_values
 from core.execution.state import ExecutionState
 from core.execution.types import Event
+from core.middleware.todos import is_todo_reminder
 from core.persistence.message_writer import write_agent_output_files, write_chat_messages
 from core.publishers.event_publisher import EventPublisher
 from core.waypoint_reports import note_new_messages
@@ -78,7 +79,8 @@ class SubagentValuesHandler(EventHandler):
         prev_count = state.subagent_values_messages_count.get(ns, 0)
         if len(msgs) > prev_count:
             state.subagent_values_messages_count[ns] = len(msgs)
-            serialized = serialize_messages_for_values(msgs)
+            # The end-of-run todo notice is the agent's to read, never a chat row.
+            serialized = [m for m in serialize_messages_for_values(msgs) if not is_todo_reminder(m)]
             if serialized:
                 # Annotate with namespace and tool_call_id for frontend grouping
                 tool_call_id = state.ns_to_tool_call.get(ns)

@@ -26,7 +26,7 @@ from psycopg_pool import AsyncConnectionPool, ConnectionPool
 from core.execution.handlers import create_handler_chain
 from core.execution.state import ExecutionState
 from core.execution.types import Event
-from core.persistence.message_writer import stamp_checkpoint_id
+from core.persistence.message_writer import record_stopped_steps, stamp_checkpoint_id
 from core.publishers.event_publisher import EventPublisher
 from core.waypoint_reports import flush_workspace_change, report_question, report_reply
 
@@ -765,6 +765,11 @@ class ExecutionManager:
 
         except asyncio.CancelledError:
             logger.info("graph_execution_cancelled", session_id=session_id)
+            # The turn's calls in flight never get a result; record them as
+            # stopped, so the chat rebuilt from history shows the turn ended
+            # as the live chat does.
+            if self._pool is not None:
+                record_stopped_steps(self._pool, session_id)
             if span:
                 span.set_attribute("cancelled", True)
                 span.end()

@@ -13,17 +13,33 @@ not to plan; the added text changed how agents behaved. This one adds no prompt,
 keeps the description to what the tool does, and answers each call with one
 line instead of echoing the list back. When to plan is the agent's own
 instructions' decision.
+
+One check, at the end: an agent that gives its final answer while its list
+still has open items is sent back to the model once, with a notice naming
+them, to close the list. Agents wrote a plan and finished without marking it
+done, leaving the user's task list running. Nothing is added to the prompt
+otherwise, and it fires at most once per run, so it can never loop. The notice
+is marked (``TODO_REMINDER_KEY``), like a reported job outcome: it is the
+agent's to read, never stored or shown as a chat message.
 """
 
+import uuid
 from typing import Annotated, Any, Literal
 
+import structlog
 from langchain.agents.middleware import AgentMiddleware, AgentState
-from langchain.agents.middleware.types import OmitFromInput
-from langchain_core.messages import ToolMessage
+from langchain.agents.middleware.types import OmitFromInput, hook_config
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import InjectedToolCallId, StructuredTool
 from langgraph.types import Command
 from pydantic import BaseModel, Field
 from typing_extensions import NotRequired, TypedDict
+
+from core.middleware.background_jobs.middleware import JOB_OUTCOME_KEY
+
+logger = structlog.get_logger(__name__)
+
+TODO_REMINDER_KEY = "todo_reminder"
 
 
 class Todo(TypedDict):
@@ -66,8 +82,54 @@ def _write_todos(todos: list[TodoItem], tool_call_id: str) -> Command[Any]:
     )
 
 
+def is_todo_reminder(message: Any) -> bool:
+    """Whether a message (live or serialized) is the end-of-run todo notice."""
+    kwargs = (
+        message.get("additional_kwargs")
+        if isinstance(message, dict)
+        else getattr(message, "additional_kwargs", None)
+    ) or {}
+    return isinstance(kwargs, dict) and TODO_REMINDER_KEY in kwargs
+
+
+def _reminded_this_run(messages: list[Any]) -> bool:
+    """Whether the notice was already given since the run's input.
+
+    A run's input is the last human message that is not a harness notice (a
+    reminder or a reported job outcome, both in the user position the model
+    API needs). A subagent's run starts from its task message.
+    """
+    for message in reversed(messages):
+        if is_todo_reminder(message):
+            return True
+        if isinstance(message, HumanMessage) and JOB_OUTCOME_KEY not in (
+            message.additional_kwargs or {}
+        ):
+            return False
+    return False
+
+
+def _reminder(open_items: list[dict[str, Any]]) -> HumanMessage:
+    items = "\n".join(f"- [{t.get('status')}] {t.get('content')}" for t in open_items)
+    return HumanMessage(
+        content=(
+            "[System Notification] Your todo list still has open items:\n"
+            f"{items}\n"
+            "Before you finish, call write_todos once more with the whole list: mark each "
+            "item you have done completed, and remove any you did not do. Then give your "
+            "final answer again."
+        ),
+        id=f"todo-reminder-{uuid.uuid4().hex}",
+        additional_kwargs={TODO_REMINDER_KEY: True},
+    )
+
+
 class TodoMiddleware(AgentMiddleware):
-    """Gives an agent ``write_todos`` and a ``todos`` state; adds nothing to its prompt."""
+    """Gives an agent ``write_todos`` and a ``todos`` state; adds nothing to its prompt.
+
+    After the model's final answer, sends the agent back once to close a list
+    it left open.
+    """
 
     state_schema = TodoState
 
@@ -82,3 +144,20 @@ class TodoMiddleware(AgentMiddleware):
                 infer_schema=False,
             )
         ]
+
+    @hook_config(can_jump_to=["model"])
+    def after_model(self, state: Any, runtime: Any) -> dict[str, Any] | None:  # noqa: ARG002
+        messages = state.get("messages") or []
+        last = messages[-1] if messages else None
+        # Only a final answer: a reply with tool calls (valid or not) is still working.
+        if not isinstance(last, AIMessage) or last.tool_calls or last.invalid_tool_calls:
+            return None
+        open_items = [t for t in state.get("todos") or [] if t.get("status") != "completed"]
+        if not open_items or _reminded_this_run(messages):
+            return None
+        logger.info("todo_list_left_open", open_items=len(open_items))
+        return {"messages": [_reminder(open_items)], "jump_to": "model"}
+
+    @hook_config(can_jump_to=["model"])
+    async def aafter_model(self, state: Any, runtime: Any) -> dict[str, Any] | None:
+        return self.after_model(state, runtime)

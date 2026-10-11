@@ -85,11 +85,13 @@ def _json_objects(text: str) -> Iterator[dict[str, Any]]:
             yield parsed
 
 
-def started_job(message: ToolMessage) -> Optional[str]:
-    """The run id of the job a tool result reports as started, or None.
+def started_jobs(message: ToolMessage) -> list[str]:
+    """The run ids of the jobs a tool result reports as started, in order.
 
-    The platform contract: a JSON object with ``status: "QUEUED"`` and the
-    ``run_id`` the SDK's ``runs/start`` returned.
+    The platform contract: one JSON object per job, with ``status: "QUEUED"``
+    and the ``run_id`` the SDK's ``runs/start`` returned. A tool that starts
+    several jobs prints one such line for each; every one is tracked. Only the
+    first used to be, so the other jobs' outcomes woke nobody.
     """
     content = message.content
     if isinstance(content, list):
@@ -97,12 +99,14 @@ def started_job(message: ToolMessage) -> Optional[str]:
             block.get("text", "") if isinstance(block, dict) else str(block) for block in content
         )
     if not isinstance(content, str):
-        return None
+        return []
+    run_ids: list[str] = []
     for obj in _json_objects(content):
         run_id = obj.get("run_id")
         if obj.get("status") == "QUEUED" and isinstance(run_id, str) and run_id:
-            return run_id
-    return None
+            if run_id not in run_ids:
+                run_ids.append(run_id)
+    return run_ids
 
 
 def _track(result: ToolMessage | Command) -> ToolMessage | Command:
@@ -110,11 +114,11 @@ def _track(result: ToolMessage | Command) -> ToolMessage | Command:
         # A Command (a subagent returning through `task`) carries its own state
         # update, its pending jobs included.
         return result
-    run_id = started_job(result)
-    if run_id is None:
+    run_ids = started_jobs(result)
+    if not run_ids:
         return result
-    logger.info("background_job_tracked", run_id=run_id, tool=result.name)
-    return Command(update={"messages": [result], "pending_jobs": [run_id]})
+    logger.info("background_job_tracked", run_ids=run_ids, tool=result.name)
+    return Command(update={"messages": [result], "pending_jobs": run_ids})
 
 
 class JobTrackingMiddleware(AgentMiddleware):
