@@ -26,6 +26,7 @@ from core.llm.factory import ModelFactory
 from core.middleware.background_jobs import JobTrackingMiddleware
 from core.middleware.custom_tool_middleware import CustomToolMiddleware
 from core.middleware.invalid_tool_calls import InvalidToolCallRetryMiddleware
+from core.middleware.replay_snapshots import ReplaySnapshotMiddleware
 from core.middleware.rubric_middleware import build_rubric_middlewares
 from core.middleware.shell_middleware import ShellMiddleware
 from core.middleware.todos import TodoMiddleware
@@ -209,6 +210,8 @@ def _build_subagent_spec(
     middleware_stack.append(ShellMiddleware())
     # An unparseable tool call goes back to the model, not to the end of its run.
     middleware_stack.append(InvalidToolCallRetryMiddleware())
+    # A workspace snapshot after each model call, for a replayable computer.
+    middleware_stack.append(ReplaySnapshotMiddleware())
     # write_todos: the subagent's plan, shown to the user as task progress (ADR-052).
     middleware_stack.append(TodoMiddleware())
     # The jobs this subagent starts return to its parent with its state (ADR-015).

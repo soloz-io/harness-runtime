@@ -18,6 +18,7 @@ try:
 
     from core.middleware.human_interaction import HumanInteractionMiddleware
     from core.middleware.invalid_tool_calls import InvalidToolCallRetryMiddleware
+    from core.middleware.replay_snapshots import ReplaySnapshotMiddleware
     from core.middleware.todos import TodoMiddleware
 except ImportError as e:
     raise ImportError(
@@ -54,6 +55,8 @@ def build_node_middleware(
         PatchToolCallsMiddleware(),
         # An unparseable tool call goes back to the model, not to the end of the turn.
         InvalidToolCallRetryMiddleware(),
+        # A workspace snapshot after each model call, for a replayable computer.
+        ReplaySnapshotMiddleware(),
     ]
     interrupt_on_config = node_config.get("interrupt_on")
     if interrupt_on_config:

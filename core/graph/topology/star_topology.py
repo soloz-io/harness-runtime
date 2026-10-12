@@ -17,6 +17,7 @@ from core.middleware.background_jobs import JobReportingMiddleware, JobTrackingM
 from core.middleware.computer_reports import ComputerReportMiddleware
 from core.middleware.custom_tool_middleware import CustomToolMiddleware
 from core.middleware.human_interaction import HumanInteractionMiddleware
+from core.middleware.replay_snapshots import ReplaySnapshotMiddleware
 from core.middleware.rubric_middleware import build_rubric_middlewares
 from core.middleware.structured_output import build_tool_strategy, resolve_structured_output_model
 
@@ -200,6 +201,8 @@ class StarTopologyBuilder(TopologyBuilder):
         middleware_stack.append(JobReportingMiddleware())
         # And what the session's computer reports (computer/report).
         middleware_stack.append(ComputerReportMiddleware())
+        # A workspace snapshot after each model call, for a replayable computer.
+        middleware_stack.append(ReplaySnapshotMiddleware())
 
         # Add CustomToolMiddleware for orchestrator if it has a tools folder
         orchestrator_node_id = orchestrator_config.get("id", "")

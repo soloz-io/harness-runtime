@@ -32,6 +32,7 @@ from core.middleware.background_jobs import JobReportingMiddleware
 from core.middleware.computer_reports import ComputerReportMiddleware
 from core.middleware.human_interaction import HumanInteractionMiddleware
 from core.middleware.invalid_tool_calls import InvalidToolCallRetryMiddleware
+from core.middleware.replay_snapshots import ReplaySnapshotMiddleware
 from core.middleware.structured_output import (
     build_tool_strategy,
     resolve_structured_output_model,
@@ -242,6 +243,8 @@ class CompositeTopologyBuilder(TopologyBuilder):
             # An unparseable tool call (an ask_user above all) goes back to the
             # model to call again, instead of silently ending the turn.
             InvalidToolCallRetryMiddleware(),
+            # A workspace snapshot after each model call, for a replayable computer.
+            ReplaySnapshotMiddleware(),
         ]
 
         # FIX: Provide DeepAgentState to SubAgentMiddleware
